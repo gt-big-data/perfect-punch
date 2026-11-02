@@ -1,4 +1,4 @@
-import React, { useState} from 'react'
+import React, { useState } from 'react'
 import HomePage from './pages/HomePage'
 import './App.css'
 import LandingPage from './pages/LandingPage'
@@ -7,9 +7,10 @@ import LoginPage from './pages/LoginPage'
 import DashboardPage from "./pages/DashboardPage"
 import SignupPage from './pages/SignupPage'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
+import AuthDebug from './dev/AuthDebug'
 
 function AppContent() {
-  const { user, loading } = useAuth() 
+  const { user, loading } = useAuth()
   const [currentPage, setCurrentPage] = useState('home')
   const [currentSessionId, setCurrentSessionId] = useState(null)
   const [analysisMetrics, setAnalysisMetrics] = useState(null)
@@ -63,10 +64,10 @@ function AppContent() {
 
   if (loading) {
     return (
-      <div style={{ 
-        display: 'flex', 
-        justifyContent: 'center', 
-        alignItems: 'center', 
+      <div style={{
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: 'center',
         height: '100vh',
         fontSize: '18px',
         color: 'white',
@@ -84,29 +85,29 @@ function AppContent() {
       )}
 
       {currentPage === 'login' && (
-        <LoginPage 
-          onLoginSuccess={handleLoginSuccess} 
+        <LoginPage
+          onLoginSuccess={handleLoginSuccess}
           onSignup={goToSignup}
         />
       )}
 
       {currentPage === 'signup' && (
-        <SignupPage 
-          onNavigate={backToHome} 
-          onSignupSuccess={handleSignupSuccess} 
+        <SignupPage
+          onNavigate={backToHome}
+          onSignupSuccess={handleSignupSuccess}
         />
       )}
 
       {currentPage === 'landing' && (
-        <LandingPage 
-          onNavigate={handleStartAnalysis} 
+        <LandingPage
+          onNavigate={handleStartAnalysis}
           onBackToHome={backToHome}
         />
       )}
 
       {currentPage === 'camera' && (
-        <CameraMirror 
-          onNavigate={backToLanding} 
+        <CameraMirror
+          onNavigate={backToLanding}
           onGoToDashboard={goToDashboard}
         />
       )}
@@ -122,6 +123,7 @@ function App() {
   return (
     <AuthProvider>
       <AppContent />
+      {import.meta.env.DEV && <AuthDebug />}
     </AuthProvider>
   )
 }

@@ -4,7 +4,7 @@ const LandingPage = ({ onNavigate, onBackToHome }) => {
   const { user } = useAuth();
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [error, setError] = useState(null);
-  const fullName = user?.user_metadata?.full_name || 'Fighter';
+  const fullName = user?.name || 'Fighter';
   const firstName = fullName.split(' ')[0];
   const containerStyle = {
     display: 'flex',
@@ -154,51 +154,51 @@ const LandingPage = ({ onNavigate, onBackToHome }) => {
 
       const data = await response.json();
       console.log('Analysis completed:', data);
-      
+
       // Transform metrics data into dashboard format
       const metricsArray = data.metrics || [];
       console.log('📊 metricsArray:', metricsArray);
-      
+
       const transformedMetrics = metricsArray.map(session => {
         const metrics = session.metrics;
         const offenseMetrics = metrics.offense;
         const defenseMetrics = metrics.defense;
         const miscMetrics = metrics.miscellaneous;
-        
+
         // Extract the accuracy data
         const punchAccuracy = offenseMetrics.punch_accuracy;
         const reactionTime = offenseMetrics.punch_reaction_time;
         const punchSpeed = offenseMetrics.punch_speed;
-        
+
         // Use the actual punches_thrown count from the session
         const totalPunches = session.punches_thrown || 0;
         const correctPunches = session.correct_punches || 0;
-        
+
         // Calculate score: (correct_punches / total_punches) * 100
         const accuracyPercent = totalPunches > 0 ? Math.round((correctPunches / totalPunches) * 100 * 10) / 10 : 0;
-        
+
         // Convert punch speed from px/s to m/s (assuming ~100 px = 1 meter for gesture tracking)
         // Handle null values gracefully
         const speedValue = punchSpeed?.derived?.average || 0;
         const avgVelocityMs = speedValue > 0 ? Math.round((speedValue / 100) * 100) / 100 : 0;
-        
+
         // Get critical prevention from punches_avoided percentage
         const criticalPrevention = defenseMetrics?.punches_avoided?.value ?? 0;
-        
+
         // Get defense breakdown from flying_blocks
         const defenseBreakdown = miscMetrics?.flying_blocks_summary?.values || { blocked: 0, dodged: 0, hit: 0 };
-        
+
         // Get reaction time values, handling nulls
         const reactionTimeBest = reactionTime?.derived?.best || reactionTime?.derived?.average || 250;
         const reactionTimeJab = reactionTime?.types?.jab || 250;
         const reactionTimeHook = reactionTime?.types?.hook || 250;
         const reactionTimeUppercut = reactionTime?.types?.uppercut || 250;
-        
+
         // Get punch accuracy values, handling nulls
         const accuracyJab = punchAccuracy?.types?.jab || 0;
         const accuracyHook = punchAccuracy?.types?.hook || 0;
         const accuracyUppercut = punchAccuracy?.types?.uppercut || 0;
-        
+
         // Get punch speed values, handling nulls
         const speedJab = punchSpeed?.types?.jab || 0;
         const speedHook = punchSpeed?.types?.hook || 0;
@@ -234,13 +234,13 @@ const LandingPage = ({ onNavigate, onBackToHome }) => {
           },
           timeline: []
         };
-        
+
         console.log('✅ Transformed single session:', transformed);
         return transformed;
       });
-      
+
       console.log('✅ All transformedMetrics:', transformedMetrics);
-      
+
       // Navigate to dashboard after successful analysis
       onNavigate('dashboard', transformedMetrics);
     } catch (err) {
