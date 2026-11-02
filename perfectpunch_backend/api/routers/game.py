@@ -11,6 +11,7 @@ from perfectpunch_backend.entra_auth import CurrentUser, get_current_user
 from perfectpunch_backend.services import game_session_service
 from perfectpunch_backend.supabase_client import StorageUnavailable
 from types import SimpleNamespace
+from perfectpunch_backend.websocket_auth import authenticate_game_socket, MAX_GAME_BYTES
 
 # Initialize router and game manager
 router = APIRouter(prefix="/game", tags=["game"])
@@ -32,14 +33,17 @@ def require_session_owner(session_id: str, user: CurrentUser):
 class ConnectionManager:
     def __init__(self):
         self.active_connections: Dict[str, List[WebSocket]] = {}
+        self.expires_at: Dict[WebSocket, float] = {}
 
-    async def connect(self, websocket: WebSocket, session_id: str):
-        await websocket.accept()
+    def register(self, websocket: WebSocket, session_id: str, expires_at: float):
+        # Only an authenticated, owner-checked connection reaches this method.
         if session_id not in self.active_connections:
             self.active_connections[session_id] = []
         self.active_connections[session_id].append(websocket)
+        self.expires_at[websocket] = expires_at
 
     def disconnect(self, websocket: WebSocket, session_id: str):
+        self.expires_at.pop(websocket, None)
         if session_id in self.active_connections:
             if websocket in self.active_connections[session_id]:
                 self.active_connections[session_id].remove(websocket)
@@ -49,10 +53,14 @@ class ConnectionManager:
     async def send_personal_message(self, message: dict, session_id: str):
         if session_id in self.active_connections:
             disconnected = []
-            for connection in self.active_connections[session_id]:
+            for connection in list(self.active_connections[session_id]):
                 try:
+                    if time.time() >= self.expires_at.get(connection, 0):
+                        await connection.close(code=4401, reason="Authentication expired")
+                        disconnected.append(connection)
+                        continue
                     await connection.send_text(json.dumps(message))
-                except:
+                except (WebSocketDisconnect, RuntimeError, OSError):
                     disconnected.append(connection)
             
             # Clean up disconnected connections
@@ -315,9 +323,69 @@ async def process_punch(session_id: str, request: ProcessPunchRequest, user: Cur
 
 @router.websocket("/sessions/{session_id}/ws")
 async def game_websocket(websocket: WebSocket, session_id: str):
-    # A protected REST API must not leave a second, unauthenticated path to the
-    # same sessions. Card 8 replaces this closed gate with first-message auth.
-    await websocket.close(code=1008, reason="Authenticated game streaming is not enabled yet")
+    user = await authenticate_game_socket(websocket, session_id, game_manager.get_session)
+    if user is None:
+        return
+    expiry = float(user.claims["exp"])
+    try:
+        # The acknowledgement must be the first response, before broadcasts can
+        # reach this connection. No session data is sent before ownership passes.
+        await websocket.send_json({"type": "auth_ok", "session_id": session_id})
+        manager.register(websocket, session_id, expiry)
+        while True:
+            remaining = expiry - time.time()
+            if remaining <= 0:
+                await websocket.close(code=4401, reason="Authentication expired")
+                break
+            try:
+                frame = await asyncio.wait_for(websocket.receive(), timeout=remaining)
+            except asyncio.TimeoutError:
+                await websocket.close(code=4401, reason="Authentication expired")
+                break
+            if frame["type"] == "websocket.disconnect":
+                break
+            # Recheck before processing, including after another route ends or
+            # removes a session while a receive was pending.
+            session = game_manager.get_session(session_id)
+            if session is None or session.user_id != user.id:
+                await websocket.close(code=4403, reason="Session not available")
+                break
+            if time.time() >= expiry:
+                await websocket.close(code=4401, reason="Authentication expired")
+                break
+            text = frame.get("text")
+            if not isinstance(text, str) or len(text.encode("utf-8")) > MAX_GAME_BYTES:
+                await websocket.close(code=1009, reason="Invalid message size or type")
+                break
+            try:
+                message = json.loads(text)
+            except (ValueError, TypeError):
+                message = None
+            if not isinstance(message, dict):
+                await websocket.close(code=1008, reason="Invalid game message")
+                break
+            kind = message.get("type")
+            if kind == "pose_data":
+                data = message.get("data")
+                if not isinstance(data, dict):
+                    await websocket.close(code=1008, reason="Invalid pose message")
+                    break
+                await handle_pose_data(websocket, session_id, data)
+            elif kind == "request_stats":
+                await websocket.send_json({"type": "stats_update", "data": game_manager.get_session_stats(session_id)})
+            elif kind == "ping":
+                await websocket.send_json({"type": "pong"})
+            elif kind == "end_session":
+                # Reuse the authenticated REST implementation, including storage
+                # ownership, rather than keeping a second save path.
+                await end_session(session_id, user)
+            else:
+                await websocket.close(code=1008, reason="Unsupported game message")
+                break
+    except (WebSocketDisconnect, RuntimeError, OSError):
+        pass
+    finally:
+        manager.disconnect(websocket, session_id)
 
 
 async def handle_pose_data(websocket: WebSocket, session_id: str, pose_data: dict):
@@ -394,17 +462,6 @@ async def handle_pose_data(websocket: WebSocket, session_id: str, pose_data: dic
         await websocket.send_text(json.dumps({
             "type": "error",
             "data": {"message": "Failed to process pose data"}
-        }))
-
-
-async def end_session_via_websocket(websocket: WebSocket, session_id: str):
-    """End session and notify via WebSocket."""
-    session = game_manager.end_session(session_id)
-    if session:
-        final_stats = game_manager.get_session_stats(session_id)
-        await websocket.send_text(json.dumps({
-            "type": "session_ended",
-            "data": final_stats
         }))
 
 

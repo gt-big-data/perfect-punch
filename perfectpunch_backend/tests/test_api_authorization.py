@@ -266,7 +266,7 @@ def test_legacy_shared_file_endpoints_are_closed(api, method, path):
     assert client.request(method, path, headers=headers()).status_code == 410
 
 
-def test_websocket_cannot_bypass_http_auth_before_card8(api):
+def test_websocket_rejects_missing_browser_origin(api):
     client, _, own, *_ = api
     with pytest.raises(WebSocketDisconnect) as result:
         with client.websocket_connect(f"/game/sessions/{own.id}/ws"):

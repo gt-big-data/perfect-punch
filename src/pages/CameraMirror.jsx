@@ -3,7 +3,8 @@ import { Pose } from '@mediapipe/pose';
 import { Camera } from '@mediapipe/camera_utils';
 import { useAuth } from '../contexts/AuthContext';
 import { useApiFetch } from '../hooks/useApiFetch';
-import { ApiAuthError, ApiNetworkError } from '../api/apiFetch';
+import { ApiAuthError, ApiError, ApiNetworkError } from '../api/apiFetch';
+import { connectGameSocket } from '../api/gameSocket';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '';
 
@@ -11,12 +12,6 @@ const PUNCH_COLORS = {
   jab: '#FF0000',    // red
   hook: '#00FF00',   // green
   uppercut: '#0000FF' // blue
-};
-
-const buildWsUrl = (path) => {
-  const url = new URL(path, API_BASE_URL);
-  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
-  return url.toString();
 };
 
 export default function CameraMirror({ onNavigate, onGoToDashboard }) {
@@ -31,7 +26,7 @@ export default function CameraMirror({ onNavigate, onGoToDashboard }) {
   const endedRef = useRef(false);
   const endingRef = useRef(false);
   
-  const { user, login } = useAuth();
+  const { user, login, getAccessToken } = useAuth();
   const apiFetch = useApiFetch();
   const [gameError, setGameError] = useState(null);
   const [sessionId, setSessionId] = useState(null);
@@ -140,87 +135,88 @@ export default function CameraMirror({ onNavigate, onGoToDashboard }) {
         setCurrentTarget(null);
         landmarkBufferRef.current = [];
 
+        // Authenticate before starting the server timer or sending any poses.
+        const connection = await connectGameSocket({
+          baseUrl: API_BASE_URL,
+          sessionId: session.session_id,
+          getAccessToken,
+          signal: controller.signal,
+          onMessage: (message) => {
+            if (isCancelled) return;
+            const { type, data } = message;
+
+            const applyStats = (stats) => {
+              if (!stats) return;
+              setScore(Math.round(stats.score ?? 0));
+              setTimeRemaining(Math.max(0, Math.ceil(stats.remaining_time ?? 0)));
+            };
+
+            switch (type) {
+              case 'target_spawn':
+                if (data) {
+                  setCurrentTarget({
+                    x: data.center_x,
+                    y: data.center_y,
+                    radius: data.radius,
+                    type: data.target_type,
+                  });
+                }
+                break;
+              case 'punch_result':
+                // Detailed result logging can help debugging in dev
+                console.log('Punch result', data);
+                break;
+              case 'stats_update':
+              case 'session_state':
+              case 'session_started':
+              case 'session_resumed':
+              case 'session_paused':
+                applyStats(data);
+                break;
+              case 'session_ended':
+              case 'session_expired':
+                applyStats(data);
+                setCurrentTarget(null);
+                if (!endingRef.current) endGame();
+                break;
+              case 'error':
+                setGameError(new ApiError(data?.message || 'The game server could not process this frame.'));
+                break;
+              default:
+                break;
+            }
+          },
+          onDisconnect: (error) => {
+            if (statsIntervalRef.current) {
+              clearInterval(statsIntervalRef.current);
+              statsIntervalRef.current = null;
+            }
+            if (!isCancelled && !endedRef.current) {
+              setCurrentTarget(null);
+              setGameError(error);
+            }
+          },
+        });
+        if (isCancelled) {
+          connection.close();
+          return { mode: 'cancelled' };
+        }
+        wsRef.current = connection;
+        sessionIdRef.current = session.session_id;
         await apiFetch(`/game/sessions/${session.session_id}/start`, {
           method: 'POST',
           signal: controller.signal,
         });
         if (isCancelled) return { mode: 'cancelled' };
-
-        const ws = new WebSocket(buildWsUrl(`/game/sessions/${session.session_id}/ws`));
-        wsRef.current = ws;
-
-        ws.onopen = () => {
-          if (statsIntervalRef.current) {
-            clearInterval(statsIntervalRef.current);
-            statsIntervalRef.current = null;
-          }
-          statsIntervalRef.current = setInterval(() => {
-            if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-              wsRef.current.send(JSON.stringify({ type: 'request_stats' }));
-            }
-          }, 1000);
-          if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-            wsRef.current.send(JSON.stringify({ type: 'request_stats' }));
-          }
-        };
-
-        ws.onmessage = (event) => {
-          const message = JSON.parse(event.data);
-          const { type, data } = message;
-
-          const applyStats = (stats) => {
-            if (!stats) return;
-            setScore(Math.round(stats.score ?? 0));
-            setTimeRemaining(Math.max(0, Math.ceil(stats.remaining_time ?? 0)));
-          };
-
-          switch (type) {
-            case 'target_spawn':
-              if (data) {
-                setCurrentTarget({
-                  x: data.center_x,
-                  y: data.center_y,
-                  radius: data.radius,
-                  type: data.target_type,
-                });
-              }
-              break;
-            case 'punch_result':
-              // Detailed result logging can help debugging in dev
-              console.log('Punch result', data);
-              break;
-            case 'stats_update':
-            case 'session_state':
-            case 'session_started':
-            case 'session_resumed':
-            case 'session_paused':
-              applyStats(data);
-              break;
-            case 'session_ended':
-            case 'session_expired':
-              applyStats(data);
-              setCurrentTarget(null);
-              endedRef.current = true;
-              onGoToDashboard(session.session_id);
-              break;
-            default:
-              console.debug('Unhandled game message', message);
-          }
-        };
-
-        ws.onerror = (err) => {
-          console.error('WebSocket error', err);
-        };
-        
-        ws.onclose = () => {
-          if (statsIntervalRef.current) {
-            clearInterval(statsIntervalRef.current);
-            statsIntervalRef.current = null;
-          }
-        };
+        connection.send({ type: 'request_stats' });
+        statsIntervalRef.current = setInterval(() => {
+          connection.send({ type: 'request_stats' });
+        }, 1000);
 
         return { mode: 'live' };
       } catch (error) {
+        wsRef.current?.close();
+        wsRef.current = null;
         if (isCancelled || error.name === 'AbortError') return { mode: 'cancelled' };
         // Only a failed network request falls back to demo mode. A 401, 403,
         // server error or token error must not silently start a guest game.
@@ -282,6 +278,7 @@ export default function CameraMirror({ onNavigate, onGoToDashboard }) {
       controller.abort();
       if (wsRef.current) {
         wsRef.current.close();
+        wsRef.current = null;
       }
       // Clean up demo timers
       if (timerIntervalRef.current) {
@@ -295,7 +292,7 @@ export default function CameraMirror({ onNavigate, onGoToDashboard }) {
         statsIntervalRef.current = null;
       }
     };
-  }, [user, apiFetch]);
+  }, [user, apiFetch, getAccessToken]);
   
   // Demo game logic - timer and target spawning
   const startDemoGame = () => {
@@ -515,8 +512,8 @@ export default function CameraMirror({ onNavigate, onGoToDashboard }) {
             checkTargetHit(results.poseLandmarks);
           }
 
-          if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN && sessionId && !sessionId.startsWith('demo-')) {
-            wsRef.current.send(JSON.stringify({
+          if (wsRef.current && sessionIdRef.current && !sessionIdRef.current.startsWith('demo-')) {
+            wsRef.current.send({
               type: 'pose_data',
               data: {
                 landmarks: serializedLandmarks,
@@ -524,7 +521,7 @@ export default function CameraMirror({ onNavigate, onGoToDashboard }) {
                 frame_height: canvas.height,
                 pose_coordinates: normalizedBuffer,
               },
-            }));
+            });
           }
         }
       }
