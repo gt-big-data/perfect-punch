@@ -1,31 +1,52 @@
-from supabase_client import supabase
+"""User-scoped persistence API. Keep these signatures when migrating to PostgreSQL."""
+from perfectpunch_backend.supabase_client import get_supabase, StorageUnavailable
 
-def save_game_session(data: dict):
-    """Save a game session to Supabase."""
-    try:
-        result = supabase.table("game_sessions").insert(data).execute()
-        return result.data
-    except Exception as e:
-        print(f"Error saving game session to Supabase: {e}")
-        raise
 
-def get_game_session(session_id: str):
-    """Get a game session from Supabase by session_id."""
-    try:
-        result = supabase.table("game_sessions").select("*").eq("session_id", session_id).order("end_time", desc=True).limit(1).execute()
-        return result.data[0] if result.data and len(result.data) > 0 else None
-    except Exception as e:
-        print(f"Error getting game session from Supabase: {e}")
-        return None
+def _require_user_id(user_id):
+    if not isinstance(user_id, str) or not user_id.strip():
+        raise ValueError("A verified user_id is required for session storage")
 
-def get_latest_session(user_id: str = None):
-    """Get the latest game session from Supabase."""
+
+def save_game_session(data: dict, user_id: str):
+    _require_user_id(user_id)
+    # The verified identity supplied by the route always wins over payload data.
+    payload = {**data, "user_id": user_id}
     try:
-        query = supabase.table("game_sessions").select("*").order("end_time", desc=True).limit(1)
-        if user_id:
-            query = query.eq("user_id", user_id)
-        result = query.execute()
-        return result.data[0] if result.data and len(result.data) > 0 else None
-    except Exception as e:
-        print(f"Error getting latest session from Supabase: {e}")
-        return None
+        return get_supabase().table("game_sessions").insert(payload).execute().data
+    except Exception as exc:
+        raise StorageUnavailable("Could not save the session") from exc
+
+
+def get_game_session(session_id: str, user_id: str):
+    _require_user_id(user_id)
+    try:
+        rows = (get_supabase().table("game_sessions").select("*")
+                .eq("session_id", session_id).eq("user_id", user_id)
+                .order("end_time", desc=True).limit(1).execute().data)
+    except Exception as exc:
+        raise StorageUnavailable("Could not read the session") from exc
+    row = rows[0] if rows else None
+    return row if row and str(row.get("user_id")) == user_id else None
+
+
+def get_latest_session(user_id: str):
+    _require_user_id(user_id)
+    try:
+        rows = (get_supabase().table("game_sessions").select("*")
+                .eq("user_id", user_id).order("end_time", desc=True)
+                .limit(1).execute().data)
+    except Exception as exc:
+        raise StorageUnavailable("Could not read session history") from exc
+    row = rows[0] if rows else None
+    return row if row and str(row.get("user_id")) == user_id else None
+
+
+def list_game_sessions(user_id: str):
+    _require_user_id(user_id)
+    try:
+        rows = (get_supabase().table("game_sessions").select("*")
+                .eq("user_id", user_id).order("end_time", desc=True)
+                .limit(100).execute().data)
+    except Exception as exc:
+        raise StorageUnavailable("Could not read session history") from exc
+    return [row for row in (rows or []) if str(row.get("user_id")) == user_id]

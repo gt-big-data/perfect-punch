@@ -3,43 +3,30 @@ from typing import Dict, List, Optional
 import json
 import asyncio
 import time
-try:
-    from perfectpunch_backend.game import (
-        GameManager, CreateSessionRequest, SessionResponse, GameStatsResponse,
-        ProcessPunchRequest, ProcessPunchResponse, SpawnTargetRequest,
-        GameUpdateMessage, TargetSpawnMessage, PunchResultMessage
-    )
-except ImportError:
-    # Fallback for relative imports
-    try:
-        from ...game import (
-            GameManager, CreateSessionRequest, SessionResponse, GameStatsResponse,
-            ProcessPunchRequest, ProcessPunchResponse, SpawnTargetRequest,
-            GameUpdateMessage, TargetSpawnMessage, PunchResultMessage
-        )
-    except ImportError:
-        # If game module not available, create dummy classes
-        GameManager = None
-        CreateSessionRequest = None
-        SessionResponse = None
-        GameStatsResponse = None
-        ProcessPunchRequest = None
-        ProcessPunchResponse = None
-        SpawnTargetRequest = None
-        GameUpdateMessage = None
-        TargetSpawnMessage = None
-        PunchResultMessage = None
+from perfectpunch_backend.game import (
+    GameManager, CreateSessionRequest, SessionResponse, GameStatsResponse,
+    ProcessPunchRequest, SpawnTargetRequest,
+)
+from perfectpunch_backend.entra_auth import CurrentUser, get_current_user
+from perfectpunch_backend.services import game_session_service
+from perfectpunch_backend.supabase_client import StorageUnavailable
 from types import SimpleNamespace
 
 # Initialize router and game manager
 router = APIRouter(prefix="/game", tags=["game"])
 
-# Initialize game manager if available
-if GameManager:
-    game_manager = GameManager()
-else:
-    game_manager = None
-    print("Warning: GameManager not available - game features will be limited")
+game_manager = GameManager()
+
+
+def require_session_owner(session_id: str, user: CurrentUser):
+    if game_manager is None:
+        raise HTTPException(status_code=503, detail="Game manager not available")
+    session = game_manager.get_session(session_id)
+    # Missing and foreign sessions deliberately have the same response.
+    if session is None or session.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return session
+
 
 # WebSocket connection manager
 class ConnectionManager:
@@ -76,14 +63,14 @@ manager = ConnectionManager()
 
 
 @router.post("/sessions")
-async def create_session(request: dict):
+async def create_session(request: CreateSessionRequest, user: CurrentUser = Depends(get_current_user)):
     """Create a new game session."""
     if not game_manager:
         raise HTTPException(status_code=503, detail="Game manager not available")
     
-    # Extract from request dict (FastAPI automatically parses JSON to dict)
-    user_id = request.get("user_id")
-    duration = request.get("duration_seconds", 30)
+    # Identity comes only from the verified access token, never the body.
+    user_id = user.id
+    duration = request.duration_seconds
     
     try:
         session = game_manager.create_session(
@@ -95,7 +82,7 @@ async def create_session(request: dict):
             return SessionResponse(
                 session_id=session.id,
                 user_id=session.user_id,
-                state=session.state,
+                state=getattr(session.state, "value", session.state),
                 start_time=session.start_time,
                 end_time=session.end_time,
                 duration_seconds=session.duration_seconds,
@@ -122,8 +109,9 @@ async def create_session(request: dict):
 
 
 @router.post("/sessions/{session_id}/start")
-async def start_session(session_id: str):
+async def start_session(session_id: str, user: CurrentUser = Depends(get_current_user)):
     """Start a game session."""
+    require_session_owner(session_id, user)
     if not game_manager:
         raise HTTPException(status_code=503, detail="Game manager not available")
     success = game_manager.start_session(session_id)
@@ -147,8 +135,9 @@ async def start_session(session_id: str):
 
 
 @router.post("/sessions/{session_id}/pause")
-async def pause_session(session_id: str):
+async def pause_session(session_id: str, user: CurrentUser = Depends(get_current_user)):
     """Pause a game session."""
+    require_session_owner(session_id, user)
     success = game_manager.pause_session(session_id)
     if not success:
         raise HTTPException(
@@ -168,8 +157,9 @@ async def pause_session(session_id: str):
 
 
 @router.post("/sessions/{session_id}/resume")
-async def resume_session(session_id: str):
+async def resume_session(session_id: str, user: CurrentUser = Depends(get_current_user)):
     """Resume a paused game session."""
+    require_session_owner(session_id, user)
     success = game_manager.resume_session(session_id)
     if not success:
         raise HTTPException(
@@ -189,8 +179,9 @@ async def resume_session(session_id: str):
 
 
 @router.post("/sessions/{session_id}/end")
-async def end_session(session_id: str):
+async def end_session(session_id: str, user: CurrentUser = Depends(get_current_user)):
     """End a game session and get final results."""
+    require_session_owner(session_id, user)
     if not game_manager:
         raise HTTPException(status_code=503, detail="Game manager not available")
     session = game_manager.end_session(session_id)
@@ -200,15 +191,15 @@ async def end_session(session_id: str):
     # Get final stats
     final_stats = game_manager.get_session_stats(session_id)
     
-    # Save session to Supabase
+    # The persistence adapter also requires the verified user ID.
+    persisted = False
     try:
-        from perfectpunch_backend.services.game_session_service import save_game_session
         from datetime import datetime
         
         # Format session data for Supabase
         session_data = {
             "session_id": session_id,
-            "user_id": session.user_id or "anonymous",
+            "user_id": user.id,
             "start_time": datetime.fromtimestamp(session.start_time).isoformat(),
             "end_time": datetime.fromtimestamp(session.end_time or time.time()).isoformat() if session.end_time else None,
             "duration_seconds": session.duration_seconds,
@@ -230,11 +221,12 @@ async def end_session(session_id: str):
             ]
         }
         
-        save_game_session(session_data)
-        print(f"Session {session_id} saved to Supabase")
-    except Exception as e:
-        print(f"Warning: Failed to save session to Supabase: {e}")
-        # Continue even if Supabase save fails
+        game_session_service.save_game_session(session_data, user_id=user.id)
+        persisted = True
+    except StorageUnavailable:
+        # The response makes a failed save explicit; keep the owned session in
+        # memory rather than discarding the only copy after 30 seconds.
+        print("Session persistence unavailable; session remains in server memory")
     
     # Notify WebSocket clients
     if final_stats:
@@ -244,18 +236,21 @@ async def end_session(session_id: str):
         )
     
     # Clean up session after a delay
-    asyncio.create_task(cleanup_session_delayed(session_id, delay=30))
+    if persisted:
+        asyncio.create_task(cleanup_session_delayed(session_id, delay=30))
     
     return {
         "message": "Session ended successfully",
         "session_id": session_id,
-        "final_stats": final_stats
+        "final_stats": final_stats,
+        "persisted": persisted,
     }
 
 
 @router.get("/sessions/{session_id}/stats", response_model=GameStatsResponse)
-async def get_session_stats(session_id: str):
+async def get_session_stats(session_id: str, user: CurrentUser = Depends(get_current_user)):
     """Get current statistics for a game session."""
+    require_session_owner(session_id, user)
     stats = game_manager.get_session_stats(session_id)
     if not stats:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -264,8 +259,9 @@ async def get_session_stats(session_id: str):
 
 
 @router.get("/sessions/{session_id}")
-async def get_session(session_id: str):
+async def get_session(session_id: str, user: CurrentUser = Depends(get_current_user)):
     """Get session information."""
+    require_session_owner(session_id, user)
     session = game_manager.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -273,7 +269,7 @@ async def get_session(session_id: str):
     return SessionResponse(
         session_id=session.id,
         user_id=session.user_id,
-        state=session.state,
+        state=getattr(session.state, "value", session.state),
         start_time=session.start_time,
         end_time=session.end_time,
         duration_seconds=session.duration_seconds,
@@ -285,8 +281,11 @@ async def get_session(session_id: str):
 
 
 @router.post("/sessions/{session_id}/targets/spawn")
-async def spawn_target(session_id: str, request: SpawnTargetRequest):
+async def spawn_target(session_id: str, request: SpawnTargetRequest, user: CurrentUser = Depends(get_current_user)):
     """Manually spawn a target (primarily for testing)."""
+    require_session_owner(session_id, user)
+    if request.session_id != session_id:
+        raise HTTPException(status_code=400, detail="Session ID does not match the request path")
     session = game_manager.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -297,8 +296,11 @@ async def spawn_target(session_id: str, request: SpawnTargetRequest):
 
 
 @router.post("/sessions/{session_id}/punch")
-async def process_punch(session_id: str, request: ProcessPunchRequest):
+async def process_punch(session_id: str, request: ProcessPunchRequest, user: CurrentUser = Depends(get_current_user)):
     """Process a punch attempt (primarily for testing without WebSocket)."""
+    require_session_owner(session_id, user)
+    if request.session_id != session_id:
+        raise HTTPException(status_code=400, detail="Session ID does not match the request path")
     session = game_manager.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -313,60 +315,9 @@ async def process_punch(session_id: str, request: ProcessPunchRequest):
 
 @router.websocket("/sessions/{session_id}/ws")
 async def game_websocket(websocket: WebSocket, session_id: str):
-    """WebSocket endpoint for real-time game communication."""
-    await manager.connect(websocket, session_id)
-    
-    session = game_manager.get_session(session_id)
-    if not session:
-        await websocket.close(code=4004, reason="Session not found")
-        return
-    
-    try:
-        # Send initial session state
-        stats = game_manager.get_session_stats(session_id)
-        if stats:
-            await websocket.send_text(json.dumps({
-                "type": "session_state",
-                "data": stats
-            }))
-        
-        # Main game loop
-        while True:
-            # Receive message from client
-            data = await websocket.receive_text()
-            message = json.loads(data)
-            
-            message_type = message.get("type")
-            message_data = message.get("data", {})
-            
-            if message_type == "pose_data":
-                # Process pose landmarks and detect punches
-                await handle_pose_data(websocket, session_id, message_data)
-                
-            elif message_type == "heartbeat":
-                # Respond to client heartbeat
-                await websocket.send_text(json.dumps({"type": "heartbeat_ack"}))
-                
-            elif message_type == "request_stats":
-                # Send current stats
-                stats = game_manager.get_session_stats(session_id)
-                if stats:
-                    await websocket.send_text(json.dumps({
-                        "type": "stats_update",
-                        "data": stats
-                    }))
-            
-            # Check if session has expired
-            if game_manager.is_session_expired(session_id):
-                await end_session_via_websocket(websocket, session_id)
-                break
-                
-    except WebSocketDisconnect:
-        manager.disconnect(websocket, session_id)
-    except Exception as e:
-        print(f"WebSocket error: {e}")
-        await websocket.close(code=4000, reason="Internal error")
-        manager.disconnect(websocket, session_id)
+    # A protected REST API must not leave a second, unauthenticated path to the
+    # same sessions. Card 8 replaces this closed gate with first-message auth.
+    await websocket.close(code=1008, reason="Authenticated game streaming is not enabled yet")
 
 
 async def handle_pose_data(websocket: WebSocket, session_id: str, pose_data: dict):
@@ -466,7 +417,7 @@ async def cleanup_session_delayed(session_id: str, delay: int = 30):
 @router.get("/health")
 async def game_health():
     """Health check for game service."""
-    model_loaded = game_manager.is_model_loaded()
+    model_loaded = bool(game_manager and game_manager.classifier and game_manager.is_model_loaded())
     return {
         "status": "healthy" if model_loaded else "degraded",
         "model_loaded": model_loaded,

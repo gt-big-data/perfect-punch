@@ -1,12 +1,7 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { useApiFetch } from '../hooks/useApiFetch';
-import { ApiNetworkError } from '../api/apiFetch';
 const LandingPage = ({ onNavigate, onBackToHome }) => {
   const { user } = useAuth();
-  const apiFetch = useApiFetch();
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [error, setError] = useState(null);
   const fullName = user?.name || 'Fighter';
   const firstName = fullName.split(' ')[0];
   const containerStyle = {
@@ -134,125 +129,9 @@ const LandingPage = ({ onNavigate, onBackToHome }) => {
     e.target.style.boxShadow = '0 4px 16px rgba(0, 0, 0, 0.2)';
   };
 
-  const handleStartAnalysis = async () => {
-    setIsAnalyzing(true);
-    setError(null);
-
-    const apiBaseUrl = import.meta.env.VITE_API_BASE_URL;
-    if (!user || !apiBaseUrl) {
-      onNavigate('camera');
-      setIsAnalyzing(false);
-      return;
-    }
-
-    try {
-      const response = await apiFetch('/analysis/start', {
-        method: 'POST',
-      });
-
-      const data = await response.json();
-      console.log('Analysis completed:', data);
-
-      // Transform metrics data into dashboard format
-      const metricsArray = data.metrics || [];
-      console.log('📊 metricsArray:', metricsArray);
-
-      const transformedMetrics = metricsArray.map(session => {
-        const metrics = session.metrics;
-        const offenseMetrics = metrics.offense;
-        const defenseMetrics = metrics.defense;
-        const miscMetrics = metrics.miscellaneous;
-
-        // Extract the accuracy data
-        const punchAccuracy = offenseMetrics.punch_accuracy;
-        const reactionTime = offenseMetrics.punch_reaction_time;
-        const punchSpeed = offenseMetrics.punch_speed;
-
-        // Use the actual punches_thrown count from the session
-        const totalPunches = session.punches_thrown || 0;
-        const correctPunches = session.correct_punches || 0;
-
-        // Calculate score: (correct_punches / total_punches) * 100
-        const accuracyPercent = totalPunches > 0 ? Math.round((correctPunches / totalPunches) * 100 * 10) / 10 : 0;
-
-        // Convert punch speed from px/s to m/s (assuming ~100 px = 1 meter for gesture tracking)
-        // Handle null values gracefully
-        const speedValue = punchSpeed?.derived?.average || 0;
-        const avgVelocityMs = speedValue > 0 ? Math.round((speedValue / 100) * 100) / 100 : 0;
-
-        // Get critical prevention from punches_avoided percentage
-        const criticalPrevention = defenseMetrics?.punches_avoided?.value ?? 0;
-
-        // Get defense breakdown from flying_blocks
-        const defenseBreakdown = miscMetrics?.flying_blocks_summary?.values || { blocked: 0, dodged: 0, hit: 0 };
-
-        // Get reaction time values, handling nulls
-        const reactionTimeBest = reactionTime?.derived?.best || reactionTime?.derived?.average || 250;
-        const reactionTimeJab = reactionTime?.types?.jab || 250;
-        const reactionTimeHook = reactionTime?.types?.hook || 250;
-        const reactionTimeUppercut = reactionTime?.types?.uppercut || 250;
-
-        // Get punch accuracy values, handling nulls
-        const accuracyJab = punchAccuracy?.types?.jab || 0;
-        const accuracyHook = punchAccuracy?.types?.hook || 0;
-        const accuracyUppercut = punchAccuracy?.types?.uppercut || 0;
-
-        // Get punch speed values, handling nulls
-        const speedJab = punchSpeed?.types?.jab || 0;
-        const speedHook = punchSpeed?.types?.hook || 0;
-        const speedUppercut = punchSpeed?.types?.uppercut || 0;
-
-        const transformed = {
-          session_id: session.session_id,
-          fighter_id: session.fighter_id,
-          timestamp: session.timestamp,
-          summary: {
-            score: correctPunches,  // Just the count, not percentage
-            avg_velocity: avgVelocityMs,  // in m/s
-            avg_reaction_time: Math.round(reactionTimeBest),
-            accuracy: accuracyPercent,  // Overall accuracy percentage
-            critical_prevention: criticalPrevention,  // % of punches avoided
-            total_punches: totalPunches
-          },
-          punch_accuracy: {
-            jab: accuracyJab,
-            hook: accuracyHook,
-            uppercut: accuracyUppercut
-          },
-          reaction_times: {
-            jab: Math.round(reactionTimeJab),
-            hook: Math.round(reactionTimeHook),
-            uppercut: Math.round(reactionTimeUppercut)
-          },
-          defense: defenseBreakdown,  // blocked, dodged, hit counts
-          punch_speed: {
-            jab: speedJab,
-            hook: speedHook,
-            uppercut: speedUppercut
-          },
-          timeline: []
-        };
-
-        console.log('✅ Transformed single session:', transformed);
-        return transformed;
-      });
-
-      console.log('✅ All transformedMetrics:', transformedMetrics);
-
-      // Navigate to dashboard after successful analysis
-      onNavigate('dashboard', transformedMetrics);
-    } catch (err) {
-      console.error('Error starting analysis:', err);
-      const message = err?.message || '';
-      if (err instanceof ApiNetworkError) {
-        onNavigate('camera');
-        return;
-      }
-      setError(message || 'Failed to start analysis. Make sure the backend is running.');
-    } finally {
-      setIsAnalyzing(false);
-    }
-  };
+  // CameraMirror captures the player's browser camera. The old analysis
+  // endpoint launched a camera on the server and wrote shared session files.
+  const handleStartAnalysis = () => onNavigate('camera');
 
   return (
     <div style={containerStyle}>
@@ -269,23 +148,13 @@ const LandingPage = ({ onNavigate, onBackToHome }) => {
         <h1 style={greetingStyle}>Welcome back, {firstName}</h1>
         <p style={welcomeStyle}>Ready to analyze your punches?</p>
         <button
-          style={{
-            ...buttonStyle,
-            opacity: isAnalyzing ? 0.7 : 1,
-            cursor: isAnalyzing ? 'not-allowed' : 'pointer',
-          }}
+          style={buttonStyle}
           onClick={handleStartAnalysis}
-          onMouseEnter={!isAnalyzing ? handleButtonHover : null}
-          onMouseLeave={!isAnalyzing ? handleButtonLeave : null}
-          disabled={isAnalyzing}
+          onMouseEnter={handleButtonHover}
+          onMouseLeave={handleButtonLeave}
         >
-          {isAnalyzing ? 'Analyzing... (Check Camera Window)' : 'Start Punch Analysis'}
+          Start Punch Analysis
         </button>
-        {error && (
-          <p style={{ color: '#ff6b6b', marginTop: '20px', fontSize: '0.95rem', textAlign: 'center' }}>
-            ❌ {error}
-          </p>
-        )}
       </div>
     </div>
   );

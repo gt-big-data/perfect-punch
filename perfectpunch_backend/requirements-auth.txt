@@ -1,0 +1,6 @@
+# Lightweight API/auth dependencies. ML dependencies remain in the team's main requirements.
+fastapi==0.162.0
+python-jose[cryptography]==3.5.0
+requests>=2.32,<3
+python-dotenv>=1.0,<2
+uvicorn>=0.30,<1

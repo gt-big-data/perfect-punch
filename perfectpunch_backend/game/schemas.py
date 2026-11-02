@@ -21,7 +21,6 @@ class TargetType(str, Enum):
 
 class CreateSessionRequest(BaseModel):
     """Request to create a new game session."""
-    user_id: Optional[str] = None
     duration_seconds: int = Field(default=30, ge=10, le=300)
 
 

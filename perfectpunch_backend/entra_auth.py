@@ -158,7 +158,7 @@ def validate_token(token: str, settings: Optional[AuthSettings] = None) -> Dict[
     except JWTError:
         raise AuthError("Malformed token")
     kid = header.get("kid")
-    if not kid:
+    if not isinstance(kid, str) or not kid:
         raise AuthError("Malformed token")
 
     key = _get_signing_key(kid, settings)
