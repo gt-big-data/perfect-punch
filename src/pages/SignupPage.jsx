@@ -62,15 +62,15 @@ export default function Signup({ onNavigate, onSignupSuccess }) {
 
         <label style={{ display: "block", fontSize: 13, color: "#444", marginTop: 12 }}>Full name</label>
         <input required value={name} onChange={e => setName(e.target.value)} placeholder="Ava Smith" autoComplete="name"
-          style={{ width: "100%", padding: 10, marginTop:6, borderRadius:8, border: "1px solid #e6e9ef" }} />
+          style={{ width: "100%", padding: 10, marginTop: 6, borderRadius: 8, border: "1px solid #e6e9ef" }} />
 
         <label style={{ display: "block", fontSize: 13, color: "#444", marginTop: 12 }}>Email</label>
         <input required type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="you@example.com" autoComplete="email"
-          style={{ width: "100%", padding: 10, marginTop:6, borderRadius:8, border: "1px solid #e6e9ef" }} />
+          style={{ width: "100%", padding: 10, marginTop: 6, borderRadius: 8, border: "1px solid #e6e9ef" }} />
 
         <label style={{ display: "block", fontSize: 13, color: "#444", marginTop: 12 }}>Password</label>
         <input required type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••" autoComplete="new-password" minLength={6}
-          style={{ width: "100%", padding: 10, marginTop:6, borderRadius:8, border: "1px solid #e6e9ef" }} />
+          style={{ width: "100%", padding: 10, marginTop: 6, borderRadius: 8, border: "1px solid #e6e9ef" }} />
 
         <button type="submit" disabled={busy}
           style={{ marginTop: 18, width: "100%", padding: 10, background: "#0b5cff", color: "white", border: "none", borderRadius: 8, cursor: "pointer", fontWeight: 600 }}>
@@ -87,7 +87,7 @@ export default function Signup({ onNavigate, onSignupSuccess }) {
           </button>
         )}
 
-        <div style={{ fontSize: 12, color:"#666", marginTop:8 }}>A confirmation email may be sent depending on your Supabase settings.</div>
+        <div style={{ fontSize: 12, color: "#666", marginTop: 8 }}>A confirmation email may be sent depending on your Supabase settings.</div>
 
         {message && (
           <div style={{ marginTop: 12, color: message.type === "error" ? "#b00020" : "#006d32" }}>

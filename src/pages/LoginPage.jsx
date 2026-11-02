@@ -22,7 +22,7 @@ const LoginPage = ({ onSignup, onLoginSuccess }) => {
         color: 'white',
         background: 'linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%)',
     }
-    
+
     const formContainerStyle = {
         backgroundColor: 'rgba(255, 255, 255, 0.95)',
         borderRadius: '20px',
@@ -32,7 +32,7 @@ const LoginPage = ({ onSignup, onLoginSuccess }) => {
         maxWidth: '400px',
         color: '#1a1a1a',
     }
-    
+
     const titleStyle = {
         fontSize: '2.5rem',
         fontWeight: 'bold',
@@ -48,7 +48,7 @@ const LoginPage = ({ onSignup, onLoginSuccess }) => {
         marginBottom: '2rem',
         textAlign: 'center',
     }
-    
+
     const inputStyle = {
         width: '100%',
         padding: '15px',
@@ -59,7 +59,7 @@ const LoginPage = ({ onSignup, onLoginSuccess }) => {
         transition: 'border-color 0.3s ease',
         boxSizing: 'border-box',
     }
-    
+
     const buttonStyle = {
         width: '100%',
         backgroundColor: '#ff6b6b',
@@ -84,128 +84,127 @@ const LoginPage = ({ onSignup, onLoginSuccess }) => {
             return
         }
         try {
-        setLoading(true);
-        setError('');
+            setLoading(true);
+            setError('');
 
-        if (!supabase) {
-            setError('Sign-in is not configured yet. Add the Supabase keys in the site settings.');
-            return;
-        }
-        
-        const { data, error } = await supabase.auth.signInWithPassword({
-            email,
-            password,
-        })
+            if (!supabase) {
+                setError('Sign-in is not configured yet. Add the Supabase keys in the site settings.');
+                return;
+            }
 
-    
-        if (error) throw error;
-        
-        if (onLoginSuccess) {
-            onLoginSuccess()
-        }
+            const { data, error } = await supabase.auth.signInWithPassword({
+                email,
+                password,
+            })
+
+
+            if (error) throw error;
+
+            if (onLoginSuccess) {
+                onLoginSuccess()
+            }
 
         } catch (error) {
-        console.error('Error logging in:', error)
-        setError(error.message || 'Failed to login. Retry')
+            console.error('Error logging in:', error)
+            setError(error.message || 'Failed to login. Retry')
         } finally {
-        setLoading(false);
+            setLoading(false);
         }
     };
-    
+
     const handleKeyPress = (e) => {
         if (e.key === 'Enter') {
-        handleLogin(e);
+            handleLogin(e);
         }
     }
 
     return (
         <div style={containerStyle}>
-    <div style={formContainerStyle}>
-        <h1 style={titleStyle}>Welcome Back</h1>
-        <p style={subtitleStyle}>Sign in to your account</p>
+            <div style={formContainerStyle}>
+                <h1 style={titleStyle}>Welcome Back</h1>
+                <p style={subtitleStyle}>Sign in to your account</p>
 
-        <form onSubmit={handleLogin}>
-        <div>
-            <label htmlFor="email" style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>
-            Email
-            </label>
-            <input
-            id="email"
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            onKeyPress={handleKeyPress}
-            style={inputStyle}
-            placeholder="you@example.com"
-            required
-            />
-        </div>
-    
-        <div>
-            <label htmlFor="password" style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>
-            Password
-            </label>
-            <input
-            id="password"
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            onKeyPress={handleKeyPress}
-            style={inputStyle}
-            placeholder="••••••••"
-            required
-            />
-        </div>
-    
-        {error && (
-            <div style={{
-            padding: '12px',
-            borderRadius: '8px',
-            backgroundColor: '#fee',
-            color: '#c33',
-            border: '1px solid #fcc',
-            marginBottom: '15px',
-            fontSize: '0.9rem',
-            }}>
-            {error}
+                <form onSubmit={handleLogin}>
+                    <div>
+                        <label htmlFor="email" style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>
+                            Email
+                        </label>
+                        <input
+                            id="email"
+                            type="email"
+                            value={email}
+                            onChange={(e) => setEmail(e.target.value)}
+                            onKeyPress={handleKeyPress}
+                            style={inputStyle}
+                            placeholder="you@example.com"
+                            required
+                        />
+                    </div>
+
+                    <div>
+                        <label htmlFor="password" style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>
+                            Password
+                        </label>
+                        <input
+                            id="password"
+                            type="password"
+                            value={password}
+                            onChange={(e) => setPassword(e.target.value)}
+                            onKeyPress={handleKeyPress}
+                            style={inputStyle}
+                            placeholder="••••••••"
+                            required
+                        />
+                    </div>
+
+                    {error && (
+                        <div style={{
+                            padding: '12px',
+                            borderRadius: '8px',
+                            backgroundColor: '#fee',
+                            color: '#c33',
+                            border: '1px solid #fcc',
+                            marginBottom: '15px',
+                            fontSize: '0.9rem',
+                        }}>
+                            {error}
+                        </div>
+                    )}
+
+                    <button
+                        type="submit"
+                        disabled={loading}
+                        style={{
+                            ...buttonStyle,
+                            opacity: loading ? 0.7 : 1,
+                            cursor: loading ? 'not-allowed' : 'pointer',
+                        }}
+                    >
+                        {loading ? 'Signing in...' : 'Sign In'}
+                    </button>
+                </form>
+
+                <div style={{ marginTop: '20px', textAlign: 'center', color: '#666' }}>
+                    <p style={{ fontSize: '0.9rem' }}>
+                        Don't have an account?{' '}
+                        <button
+                            onClick={onSignup}
+                            style={{
+                                background: 'none',
+                                border: 'none',
+                                color: '#ff6b6b',
+                                cursor: 'pointer',
+                                fontWeight: 'bold',
+                                fontSize: '0.9rem',
+                                textDecoration: 'underline',
+                            }}
+                        >
+                            Sign up
+                        </button>
+                    </p>
+                </div>
             </div>
-        )}
-    
-    <button
-            type="submit"
-            disabled={loading}
-            style={{
-            ...buttonStyle,
-            opacity: loading ? 0.7 : 1,
-            cursor: loading ? 'not-allowed' : 'pointer',
-            }}
-        >
-            {loading ? 'Signing in...' : 'Sign In'}
-        </button>
-        </form>
-    
-        <div style={{ marginTop: '20px', textAlign: 'center', color: '#666' }}>
-        <p style={{ fontSize: '0.9rem' }}>
-            Don't have an account?{' '}
-            <button
-            onClick={onSignup}
-            style={{
-                background: 'none',
-                border: 'none',
-                color: '#ff6b6b',
-                cursor: 'pointer',
-                fontWeight: 'bold',
-                fontSize: '0.9rem',
-                textDecoration: 'underline',
-            }}
-            >
-            Sign up
-            </button>
-        </p>
-        </div>
-        </div>
         </div>
     );
-    }
-    export default LoginPage;
-    
+}
+export default LoginPage;

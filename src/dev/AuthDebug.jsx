@@ -4,7 +4,7 @@ import { useAuth } from '../contexts/AuthContext'
 // TEMPORARY developer panel (shows only under `npm run dev`, never in a build).
 // It lets you sign in and check what is inside the access token our API will receive.
 // It never shows the token itself, only a summary of its claims.
-// Delete this file, and its line in App.jsx, once card 5 (login pages) is done.
+// Delete this file, and its two lines in App.jsx, when the auth cards are finished.
 
 const apiScope = import.meta.env.VITE_API_SCOPE || ''
 
