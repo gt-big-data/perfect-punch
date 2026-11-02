@@ -1,24 +1,55 @@
-import React, { useState, useRef, useEffect } from "react";
-import { createClient } from "@supabase/supabase-js";
+import React, { useState } from "react";
+import { supabase, isSupabaseConfigured } from "../config/supabase";
 
-export default function Signup() {
-  const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
-  const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
-  const supabaseRef = useRef(null);
+export default function Signup({ onNavigate, onSignupSuccess }) {
+  // All hooks must run before any early return, otherwise the hook order
+  // changes between renders and React throws.
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState(null);
 
-  useEffect(() => {
-    if (SUPABASE_URL && SUPABASE_ANON_KEY) {
-      try {
-        supabaseRef.current = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-      } catch (err) {
-        // If createClient throws, keep ref null and log for debugging
-        console.error("Failed to create Supabase client:", err);
-        supabaseRef.current = null;
-      }
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setMessage(null);
+    setBusy(true);
+
+    try {
+      const { error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: { data: { full_name: name } },
+      });
+
+      if (error) throw error;
+
+      setMessage({ type: "success", text: "Account created! Taking you to sign in…" });
+      setName("");
+      setEmail("");
+      setPassword("");
+      setBusy(false);
+
+      setTimeout(() => { onSignupSuccess?.(); }, 900);
+    } catch (err) {
+      console.error("Signup failed:", err);
+      // supabase-js surfaces a browser network failure as a bare "Failed to
+      // fetch", which tells the user nothing. Name the likely cause instead.
+      const isNetworkError =
+        err?.message === "Failed to fetch" ||
+        err?.name === "AuthRetryableFetchError" ||
+        err?.message?.includes("NetworkError");
+      setMessage({
+        type: "error",
+        text: isNetworkError
+          ? `Could not reach the auth server at ${import.meta.env.VITE_SUPABASE_URL}. Check that the Supabase project is running and that VITE_SUPABASE_URL in .env.local is correct, then restart the dev server.`
+          : err?.message || "Unexpected error. Check console.",
+      });
+      setBusy(false);
     }
-  }, [SUPABASE_URL, SUPABASE_ANON_KEY]);
+  };
 
-  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+  if (!isSupabaseConfigured) {
     return (
       <div style={{ padding: 24, fontFamily: 'system-ui, -apple-system', minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <div style={{ maxWidth: 680 }}>
@@ -32,53 +63,13 @@ VITE_SUPABASE_URL=your-supabase-url
 VITE_SUPABASE_ANON_KEY=your-anon-key
           </pre>
           <p style={{ color: '#444' }}>Then restart the dev server: <code>npm run dev</code></p>
+          <button type="button" onClick={onNavigate} style={{ marginTop: 12, padding: '8px 16px', borderRadius: 8, border: '1px solid #ccc', cursor: 'pointer' }}>
+            ← Back to Home
+          </button>
         </div>
       </div>
     );
   }
-
-  const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState(null);
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setMessage(null);
-    setBusy(true);
-
-    const supabase = supabaseRef.current;
-    if (!supabase) {
-      setMessage({ type: "error", text: "Supabase client not initialized. Check console." });
-      setBusy(false);
-      return;
-    }
-
-    try {
-      const { data, error } = await supabase.auth.signUp(
-        { email, password, options: {data : {full_name: name,},}},
-      );
-
-      if (error) {
-        setMessage({ type: "error", text: error.message });
-        setBusy(false);
-        return;
-      }
-
-      setMessage({ type: "success", text: "Success! Redirecting…" });
-      setName("");
-      setEmail("");
-      setPassword("");
-      setBusy(false);
-
-      setTimeout(() => { window.location.href = "/"; }, 900);
-    } catch (err) {
-      console.error(err);
-      setMessage({ type: "error", text: "Unexpected error. Check console." });
-      setBusy(false);
-    }
-  };
 
   return (
     <div style={{

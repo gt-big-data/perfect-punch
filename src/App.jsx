@@ -10,7 +10,7 @@ import { AuthProvider, useAuth } from './contexts/AuthContext'
 
 function AppContent() {
   const { user, loading } = useAuth() 
-  const [currentPage, setCurrentPage] = useState('home')
+  const [currentPage, setCurrentPage] = useState('dashboard')
   const [currentSessionId, setCurrentSessionId] = useState(null)
   const [analysisMetrics, setAnalysisMetrics] = useState(null)
 
