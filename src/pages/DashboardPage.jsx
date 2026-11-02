@@ -1,4 +1,7 @@
 import React, { useEffect, useState } from "react";
+import { useAuth } from "../contexts/AuthContext";
+import { useApiFetch } from "../hooks/useApiFetch";
+import { ApiAuthError, ApiError } from "../api/apiFetch";
 import {
   BarChart,
   Bar,
@@ -15,159 +18,71 @@ import {
   ResponsiveContainer,
 } from "recharts";
 
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "";
+
 const DashboardPage = ({ onNavigate, sessionId = null, metricsData = null }) => {
+  const { user, login } = useAuth();
+  const apiFetch = useApiFetch();
+  const [sessionError, setSessionError] = useState(null);
   const [sessionData, setSessionData] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  // ---------------------------------------------------------
-  // 🚀 FETCH REAL SESSION DATA (METRICS FIRST, THEN LOCALSTORAGE, THEN API)
-  // ---------------------------------------------------------
+  // Demo sessions stay in this browser. Account sessions come from the API.
   useEffect(() => {
+    let cancelled = false;
+    const controller = new AbortController();
     setLoading(true);
+    setSessionData(null);
+    setSessionError(null);
 
     async function fetchData() {
-      console.log("🔍 Fetching session data...", { sessionId, metricsData });
-
-      // 0️⃣ FIRST: Check if metrics were passed directly from analysis
-      if (metricsData) {
-        try {
-          console.log("✅ Using metrics data from analysis:", metricsData);
-          // The metrics data from the analysis is already transformed
-          const metrics = Array.isArray(metricsData) ? metricsData[0] : metricsData;
-          console.log("📊 Transformed metrics structure:", {
-            hasSession: !!metrics.session_id,
-            hasSummary: !!metrics.summary,
-            hasPunchAccuracy: !!metrics.punch_accuracy,
-            hasReactionTimes: !!metrics.reaction_times,
-            hasDefense: !!metrics.defense
-          });
-          setSessionData(metrics);
-          setLoading(false);
-          return;
-        } catch (err) {
-          console.error("❌ Error processing metrics data:", err);
-        }
-      }
-
-      // 1️⃣ THEN: Try loading from localStorage (for demo sessions)
-      if (sessionId && sessionId.startsWith('demo-')) {
-        try {
-          const storedKey = `demo_session_${sessionId}`;
-          const storedData = localStorage.getItem(storedKey);
-          
-          if (storedData) {
-            const data = JSON.parse(storedData);
-            console.log("✅ Loaded demo session from localStorage:", data.session_id);
-            console.log("📊 Session data structure:", {
-              hasSummary: !!data.summary,
-              hasPunchAccuracy: !!data.punch_accuracy,
-              hasReactionTimes: !!data.reaction_times,
-              hasDefense: !!data.defense,
-              hasTimeline: !!data.timeline,
-              timelineLength: data.timeline?.length || 0
-            });
-            setSessionData(data);
-            setLoading(false);
-            return;
-          } else {
-            console.warn("⚠️ Demo session not found in localStorage:", storedKey);
-          }
-        } catch (error) {
-          console.error("❌ Error loading from localStorage:", error);
-        }
-      }
-
-      // 2️⃣ SECOND: If no sessionId provided, check for latest demo session
-      if (!sessionId) {
-        try {
-          const demoKeys = Object.keys(localStorage).filter(k => k.startsWith('demo_session_'));
-          if (demoKeys.length > 0) {
-            // Load all sessions and sort by timestamp (newest first)
-            const sessions = demoKeys.map(key => {
-              try {
-                const storedData = localStorage.getItem(key);
-                if (storedData) {
-                  const data = JSON.parse(storedData);
-                  return {
-                    key,
-                    data,
-                    timestamp: data.timestamp ? new Date(data.timestamp).getTime() : 0
-                  };
-                }
-              } catch (e) {
-                console.error(`Error parsing session ${key}:`, e);
-              }
-              return null;
-            }).filter(s => s !== null);
-            
-            // Sort by timestamp descending (newest first)
-            sessions.sort((a, b) => b.timestamp - a.timestamp);
-            
-            if (sessions.length > 0) {
-              const latestSession = sessions[0].data;
-              console.log("✅ Loaded latest demo session from localStorage:", latestSession.session_id);
-              console.log("📊 Session timestamp:", latestSession.timestamp);
-              console.log("📊 Session data structure:", {
-                hasSummary: !!latestSession.summary,
-                hasPunchAccuracy: !!latestSession.punch_accuracy,
-                hasReactionTimes: !!latestSession.reaction_times,
-                hasDefense: !!latestSession.defense,
-                hasTimeline: !!latestSession.timeline,
-                timelineLength: latestSession.timeline?.length || 0,
-                score: latestSession.summary?.score,
-                totalPunches: latestSession.summary?.total_punches
-              });
-              setSessionData(latestSession);
-              setLoading(false);
-              return;
-            }
-          }
-        } catch (error) {
-          console.error("❌ Error loading latest demo session:", error);
-        }
-      }
-
-      // 3️⃣ THIRD: Try API endpoint when a backend URL is configured
-      const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
-      if (!API_BASE_URL) {
-        setSessionData(null);
-        setLoading(false);
-        return;
-      }
-
       try {
-
-        let url = `${API_BASE_URL}/session/latest`;
-        if (sessionId) {
-          url += `?session_id=${encodeURIComponent(sessionId)}`;
+        let data = null;
+        if (metricsData) {
+          data = Array.isArray(metricsData) ? metricsData[0] : metricsData;
+        } else if (sessionId?.startsWith("demo-") || (!sessionId && (!user || !API_BASE_URL))) {
+          // An explicit demo session must never fall through to the account API.
+          if (sessionId) {
+            const stored = localStorage.getItem(`demo_session_${sessionId}`);
+            data = stored ? JSON.parse(stored) : null;
+          } else {
+            const demos = Object.keys(localStorage)
+              .filter((key) => key.startsWith("demo_session_"))
+              .map((key) => {
+                try { return JSON.parse(localStorage.getItem(key)); }
+                catch { return null; }
+              })
+              .filter(Boolean)
+              .sort((a, b) => (Date.parse(b.timestamp) || 0) - (Date.parse(a.timestamp) || 0));
+            data = demos[0] || null;
+          }
+        } else {
+          if (!user) throw new ApiAuthError('Sign in to view sessions saved to your account.');
+          if (!API_BASE_URL) throw new ApiError('The game server is not configured yet.');
+          const query = sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : "";
+          const response = await apiFetch(`/session/latest${query}`, {
+            cache: "no-store",
+            signal: controller.signal,
+          });
+          data = await response.json();
+          // The old backend returns a static demo when no session is found.
+          // Do not present that as the signed-in player's saved game.
+          if (data?.session_id === "demo_001") data = null;
         }
-
-        const response = await fetch(url, { cache: "no-store" });
-
-        if (!response.ok) {
-          throw new Error(`Backend error: ${response.status}`);
-        }
-
-        const data = await response.json();
-        console.log("📊 LOADED SESSION FROM API:", data);
-
-        // Accept demo_001 as fallback if no real data is available
-        // This allows the dashboard to display something while waiting for real game data
-        if (data.session_id === "demo_001") {
-          console.warn("⚠️ Backend returned demo data - this is fallback data. Play a game to see your real session data.");
-        }
-
-        setSessionData(data);
+        if (!cancelled) setSessionData(data || null);
       } catch (error) {
-        console.error("❌ Failed to load session data:", error);
-        setSessionData(null);
+        if (!cancelled && error.name !== 'AbortError') setSessionError(error);
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     }
 
     fetchData();
-  }, [sessionId, metricsData]);
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [sessionId, metricsData, user, apiFetch]);
 
   // ---------------------------------------------------------
   // ⚠️ LOADING OR ERROR STATES
@@ -208,17 +123,20 @@ const DashboardPage = ({ onNavigate, sessionId = null, metricsData = null }) => 
         }}
       >
         <div style={{ fontSize: "1.5rem", fontWeight: "700", textAlign: "center", color: "#ff6b6b" }}>
-          ⚠️ Using static data - play a new game to see your data
+          {sessionError ? "Could not load this session" : "No session data yet"}
         </div>
         <div style={{ fontSize: "1.125rem", textAlign: "center", maxWidth: "600px", color: "#b0b0b8" }}>
-          No session data found. To see your real game data:
-          <ol style={{ marginTop: "16px", paddingLeft: "20px", textAlign: "left", listStyleType: "decimal" }}>
+          {sessionError ? sessionError.message : "Play a game to see your session data:"}
+          {!sessionError && <ol style={{ marginTop: "16px", paddingLeft: "20px", textAlign: "left", listStyleType: "decimal" }}>
             <li>Go to the Landing page</li>
             <li>Click "Start Analysis" to play a game</li>
             <li>Hit some targets and click "End Game"</li>
             <li>Your data will appear here automatically</li>
-          </ol>
+          </ol>}
         </div>
+        {sessionError instanceof ApiAuthError && (
+          <button type="button" onClick={login}>Sign in</button>
+        )}
         <button
           onClick={() => onNavigate("landing")}
           style={{
@@ -269,11 +187,6 @@ const DashboardPage = ({ onNavigate, sessionId = null, metricsData = null }) => 
   ];
 
   const COLORS = ["#ff6b6b", "#ff8787", "#ff5252", "#ff8a80"];
-
-  const totalDefense =
-    (defense.blocked || 0) +
-    (defense.dodged || 0) +
-    (defense.hit || 0);
 
   // Ensure timeline exists and is an array
   const timeline = Array.isArray(sessionData.timeline) && sessionData.timeline.length > 0

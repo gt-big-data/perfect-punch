@@ -1,7 +1,10 @@
 import React, { useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
+import { useApiFetch } from '../hooks/useApiFetch';
+import { ApiNetworkError } from '../api/apiFetch';
 const LandingPage = ({ onNavigate, onBackToHome }) => {
   const { user } = useAuth();
+  const apiFetch = useApiFetch();
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [error, setError] = useState(null);
   const fullName = user?.name || 'Fighter';
@@ -136,21 +139,16 @@ const LandingPage = ({ onNavigate, onBackToHome }) => {
     setError(null);
 
     const apiBaseUrl = import.meta.env.VITE_API_BASE_URL;
-    if (!apiBaseUrl) {
+    if (!user || !apiBaseUrl) {
       onNavigate('camera');
       setIsAnalyzing(false);
       return;
     }
 
     try {
-      const response = await fetch(`${apiBaseUrl.replace(/\/$/, '')}/analysis/start`, {
+      const response = await apiFetch('/analysis/start', {
         method: 'POST',
       });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || 'Analysis failed');
-      }
 
       const data = await response.json();
       console.log('Analysis completed:', data);
@@ -246,10 +244,7 @@ const LandingPage = ({ onNavigate, onBackToHome }) => {
     } catch (err) {
       console.error('Error starting analysis:', err);
       const message = err?.message || '';
-      const backendDown =
-        err instanceof TypeError ||
-        /failed to fetch|networkerror|load failed/i.test(message);
-      if (backendDown) {
+      if (err instanceof ApiNetworkError) {
         onNavigate('camera');
         return;
       }

@@ -2,6 +2,8 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Pose } from '@mediapipe/pose';
 import { Camera } from '@mediapipe/camera_utils';
 import { useAuth } from '../contexts/AuthContext';
+import { useApiFetch } from '../hooks/useApiFetch';
+import { ApiAuthError, ApiNetworkError } from '../api/apiFetch';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '';
 
@@ -11,7 +13,6 @@ const PUNCH_COLORS = {
   uppercut: '#0000FF' // blue
 };
 
-const buildHttpUrl = (path) => new URL(path, API_BASE_URL).toString();
 const buildWsUrl = (path) => {
   const url = new URL(path, API_BASE_URL);
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -28,8 +29,11 @@ export default function CameraMirror({ onNavigate, onGoToDashboard }) {
   const statsIntervalRef = useRef(null);
   const sessionIdRef = useRef(null);
   const endedRef = useRef(false);
+  const endingRef = useRef(false);
   
-  const { user } = useAuth();
+  const { user, login } = useAuth();
+  const apiFetch = useApiFetch();
+  const [gameError, setGameError] = useState(null);
   const [sessionId, setSessionId] = useState(null);
   const [currentTarget, setCurrentTarget] = useState(null);
   const [score, setScore] = useState(0);
@@ -93,6 +97,8 @@ export default function CameraMirror({ onNavigate, onGoToDashboard }) {
   // Initialize game session
   useEffect(() => {
     let isCancelled = false;
+    const controller = new AbortController();
+    setGameError(null);
 
     const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -109,40 +115,36 @@ export default function CameraMirror({ onNavigate, onGoToDashboard }) {
     };
 
     const initializeLiveSession = async () => {
-      if (!API_BASE_URL) {
+      // Guests always play locally, even when a server URL is configured.
+      if (!user || !API_BASE_URL) {
         return { mode: 'demo' };
       }
 
       try {
-        const createResponse = await fetch(buildHttpUrl('/game/sessions'), {
+        const createResponse = await apiFetch('/game/sessions', {
           method: 'POST',
+          signal: controller.signal,
           headers: {
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
-            user_id: user?.id ?? 'demo-user',
             duration_seconds: 30,
           }),
         });
 
-        if (!createResponse.ok) {
-          throw new Error('Failed to create game session');
-        }
-
         const session = await createResponse.json();
+        if (isCancelled) return { mode: 'cancelled' };
         setSessionId(session.session_id);
         setScore(session.score ?? 0);
         setTimeRemaining(session.duration_seconds ?? 30);
         setCurrentTarget(null);
         landmarkBufferRef.current = [];
 
-        const startResponse = await fetch(buildHttpUrl(`/game/sessions/${session.session_id}/start`), {
+        await apiFetch(`/game/sessions/${session.session_id}/start`, {
           method: 'POST',
+          signal: controller.signal,
         });
-
-        if (!startResponse.ok) {
-          throw new Error('Failed to start game session');
-        }
+        if (isCancelled) return { mode: 'cancelled' };
 
         const ws = new WebSocket(buildWsUrl(`/game/sessions/${session.session_id}/ws`));
         wsRef.current = ws;
@@ -199,7 +201,7 @@ export default function CameraMirror({ onNavigate, onGoToDashboard }) {
               applyStats(data);
               setCurrentTarget(null);
               endedRef.current = true;
-              onGoToDashboard(sessionId);
+              onGoToDashboard(session.session_id);
               break;
             default:
               console.debug('Unhandled game message', message);
@@ -219,8 +221,14 @@ export default function CameraMirror({ onNavigate, onGoToDashboard }) {
 
         return { mode: 'live' };
       } catch (error) {
-        console.warn('Backend not available, starting demo mode:', error);
-        return { mode: 'demo' };
+        if (isCancelled || error.name === 'AbortError') return { mode: 'cancelled' };
+        // Only a failed network request falls back to demo mode. A 401, 403,
+        // server error or token error must not silently start a guest game.
+        if (error instanceof ApiNetworkError) {
+          console.warn('Game server unavailable; starting a local demo.');
+          return { mode: 'demo' };
+        }
+        throw error;
       }
     };
 
@@ -262,10 +270,16 @@ export default function CameraMirror({ onNavigate, onGoToDashboard }) {
       }
     };
     
-    startGame();
+    startGame().catch((error) => {
+      if (!isCancelled) {
+        setGameError(error);
+        setPreStartCountdown(null);
+      }
+    });
     
     return () => {
       isCancelled = true;
+      controller.abort();
       if (wsRef.current) {
         wsRef.current.close();
       }
@@ -281,7 +295,7 @@ export default function CameraMirror({ onNavigate, onGoToDashboard }) {
         statsIntervalRef.current = null;
       }
     };
-  }, [user]);
+  }, [user, apiFetch]);
   
   // Demo game logic - timer and target spawning
   const startDemoGame = () => {
@@ -471,7 +485,7 @@ export default function CameraMirror({ onNavigate, onGoToDashboard }) {
           const normalizedBuffer = (() => {
             const names = ['RIGHT_ELBOW','RIGHT_WRIST','LEFT_ELBOW','LEFT_WRIST'];
             if (newBuffer.length === 0) return [];
-            const base = names.map((n, i) => [newBuffer[0].landmarks[n].x, newBuffer[0].landmarks[n].y]);
+            const base = names.map((n) => [newBuffer[0].landmarks[n].x, newBuffer[0].landmarks[n].y]);
             const rel = newBuffer.map(rec => names.map((n, i) => {
               const p = rec.landmarks[n];
               return [p.x - base[i][0], p.y - base[i][1]];
@@ -629,6 +643,9 @@ export default function CameraMirror({ onNavigate, onGoToDashboard }) {
   };
 
   const endGame = async () => {
+    if (endingRef.current) return;
+    endingRef.current = true;
+    endedRef.current = true;
     // Stop demo timers
     if (timerIntervalRef.current) {
       clearInterval(timerIntervalRef.current);
@@ -689,20 +706,19 @@ export default function CameraMirror({ onNavigate, onGoToDashboard }) {
       wsRef.current.close();
     }
     
-    // Try to end session on backend (optional, don't block navigation)
-    if (API_BASE_URL && activeSessionId && !activeSessionId.startsWith('demo-')) {
+    // Signed-in sessions use the same authenticated HTTP client when ending.
+    if (user && API_BASE_URL && activeSessionId && !activeSessionId.startsWith('demo-')) {
       try {
-        const response = await fetch(buildHttpUrl(`/game/sessions/${activeSessionId}/end`), {
+        const response = await apiFetch(`/game/sessions/${activeSessionId}/end`, {
           method: 'POST',
         });
-        
-        if (response.ok) {
-          const stats = await response.json();
-          setScore(stats.final_stats?.score ?? 0);
-          setTimeRemaining(0);
-        }
+        const stats = await response.json();
+        setScore(stats.final_stats?.score ?? 0);
+        setTimeRemaining(0);
       } catch (error) {
-        console.warn('Failed to end game on backend, navigating anyway:', error);
+        setGameError(error);
+        endingRef.current = false;
+        return;
       }
     }
     
@@ -777,6 +793,19 @@ export default function CameraMirror({ onNavigate, onGoToDashboard }) {
         height={STREAM_HEIGHT}
         style={{ width: '100%', height: '100%', objectFit: 'contain' }}
       />
+      {gameError && (
+        <div role="alert" style={{
+          position: 'absolute', inset: 0, zIndex: 30, background: 'rgba(0, 0, 0, 0.9)',
+          display: 'flex', flexDirection: 'column', alignItems: 'center',
+          justifyContent: 'center', gap: 20, color: '#fff', padding: 24, textAlign: 'center'
+        }}>
+          <p>{gameError.message || 'Could not start or save this game session.'}</p>
+          {gameError instanceof ApiAuthError && (
+            <button type="button" onClick={login}>Sign in</button>
+          )}
+          <button type="button" onClick={onNavigate}>Back to coaching</button>
+        </div>
+      )}
       {preStartCountdown !== null && (
         <div
           style={{
