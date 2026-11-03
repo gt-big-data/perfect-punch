@@ -86,18 +86,24 @@ Set the backend-only `DATABASE_URL` environment variable to the Azure PostgreSQL
 connection string. Keep this value out of frontend `VITE_*` variables and source
 control. The backend requires TLS when connecting.
 
-Apply the database migrations in order before starting the backend. For example,
-with `psql` installed:
+Apply the database migrations in order from the repository root, using the
+project's Python PostgreSQL driver:
 
 ```powershell
-psql "$env:DATABASE_URL" -f perfectpunch_backend/db/migrations/001_create_game_sessions.sql
-psql "$env:DATABASE_URL" -f perfectpunch_backend/db/migrations/002_create_punches.sql
+python -m perfectpunch_backend.db.apply_migrations
 ```
 
-The `game_sessions` migration stores session details as JSONB and indexes the
-session, user, and time fields used by the API. Supabase remains configured for
-authentication only. Azure resource provisioning and FastAPI App Service
-deployment are not part of this code setup.
+Migration 003 organizes session summaries in `game_sessions`, flattened metric
+values and descriptions in `session_metrics`, and per-punch-type metrics or game
+attempts in `punches`. Existing JSON-backed sessions can be moved into the
+structured columns and tables by running:
+
+```powershell
+python -m perfectpunch_backend.db.backfill_sessions
+```
+
+Supabase remains configured for authentication only. Azure resource provisioning
+and FastAPI App Service deployment are not part of this code setup.
 
 ## How to Use
 

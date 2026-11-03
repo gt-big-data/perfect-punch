@@ -1,47 +1,74 @@
 [
   {
     "fighter_id": "fighter_sample_001",
-    "session_id": "session_20261026_170433",
-    "timestamp": "2026-10-26T17:04:33Z",
-    "punches_thrown": 9,
-    "correct_punches": 4,
+    "session_id": "session_20261031_193510",
+    "timestamp": "2026-10-31T19:35:10Z",
+    "punches_thrown": 4,
+    "correct_punches": 0,
+    "score": 450,
     "metrics": {
       "offense": {
+        "target_timing": {
+          "unit": "count",
+          "types": {
+            "jab": {
+              "perfect": 1,
+              "good": 1,
+              "miss": 3
+            },
+            "hook": {
+              "perfect": 0,
+              "good": 1,
+              "miss": 1
+            },
+            "uppercut": {
+              "perfect": 0,
+              "good": 1,
+              "miss": 0
+            }
+          },
+          "totals": {
+            "perfect": 1,
+            "good": 3,
+            "miss": 4
+          },
+          "description": "PERFECT / GOOD / MISS timing grades per punch type, judged against the approach ring."
+        },
         "punch_accuracy": {
           "unit": "%",
           "types": {
-            "jab": 60.0,
-            "hook": 25.0,
-            "uppercut": null
+            "jab": 0.0,
+            "hook": 0.0,
+            "uppercut": 0.0
           },
           "derived": {
-            "average": 44.44,
+            "average": 0.0,
             "average_description": "Average of all recorded punch accuracies across the session.",
-            "best": 66.67,
-            "worst": 33.33,
+            "best": 0.0,
+            "worst": 0.0,
             "all_points": [
-              66.67,
-              33.33,
-              33.33
+              0.0,
+              0.0,
+              0.0
             ]
           }
         },
         "punch_reaction_time": {
           "unit": "ms",
           "types": {
-            "jab": 1073.48,
-            "hook": 1527.14,
-            "uppercut": null
+            "jab": 1074.57,
+            "hook": 1203.92,
+            "uppercut": 836.77
           },
           "derived": {
-            "average": 1275.1,
+            "average": 1047.46,
             "average_description": "Average reaction time, in milliseconds, measured across all punches.",
-            "best": 1001.84,
-            "worst": 1985.47,
+            "best": 836.77,
+            "worst": 1222.11,
             "all_points": [
-              1225.04,
-              1360.26,
-              1240.02
+              927.03,
+              1203.92,
+              1029.44
             ],
             "all_points_description": "Reaction time averages for each 10-second segment of the session."
           }
@@ -49,26 +76,26 @@
         "punch_speed": {
           "unit": "px/s",
           "types": {
-            "jab": 4878.35,
-            "hook": 4159.38,
-            "uppercut": null
+            "jab": 4817.85,
+            "hook": 4842.39,
+            "uppercut": 5703.95
           },
           "derived": {
-            "average": 4558.8,
+            "average": 5045.51,
             "average_description": "Mean punch speed across all punch types during the session.",
-            "best": 6364.47,
-            "worst": 2927.91,
+            "best": 7149.75,
+            "worst": 2485.96,
             "all_points": [
-              5443.8,
-              3520.67,
-              4711.94
+              2485.96,
+              4842.39,
+              6426.85
             ],
             "combo_tempo": {
               "unit": "px/s",
               "segments": {
-                "first_third": 5443.8,
-                "second_third": 3520.67,
-                "final_third": 4711.94
+                "first_third": 2485.96,
+                "second_third": 4842.39,
+                "final_third": 6426.85
               },
               "description": "Average punch speed per 10-second segment of the session."
             }
@@ -98,14 +125,14 @@
           "unit": "%",
           "description": "Average accuracy over each third of the session.",
           "segments": {
-            "first_third": 66.67,
-            "second_third": 33.33,
-            "final_third": 33.33
+            "first_third": 0.0,
+            "second_third": 0.0,
+            "final_third": 0.0
           }
         },
         "punches_avoided": {
           "unit": "%",
-          "value": 60.0,
+          "value": 20.0,
           "description": "Percentage of incoming targets that were blocked or dodged."
         }
       },
@@ -113,9 +140,9 @@
         "flying_blocks_summary": {
           "unit": "count",
           "values": {
-            "blocked": 0,
-            "dodged": 3,
-            "hit": 2
+            "blocked": 1,
+            "dodged": 0,
+            "hit": 4
           },
           "description": "Counts of block, dodge, and hit outcomes from the flying blocks drill."
         }
