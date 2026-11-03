@@ -87,7 +87,7 @@ const LoginPage = ({ onSignup, onLoginSuccess }) => {
         setLoading(true);
         setError('');
         
-        const { error } = await supabase.auth.signInWithPassword({
+        const { data, error } = await supabase.auth.signInWithPassword({
             email,
             password,
         })
@@ -99,19 +99,9 @@ const LoginPage = ({ onSignup, onLoginSuccess }) => {
             onLoginSuccess()
         }
 
-        } catch (err) {
-        console.error('Error logging in:', err)
-        // A bare "Failed to fetch" means the request never reached Supabase.
-        // Say which host was unreachable instead of leaving the user guessing.
-        const isNetworkError =
-            err?.message === 'Failed to fetch' ||
-            err?.name === 'AuthRetryableFetchError' ||
-            err?.message?.includes('NetworkError')
-        setError(
-            isNetworkError
-            ? `Could not reach the auth server at ${import.meta.env.VITE_SUPABASE_URL}. Check that the Supabase project is running and that VITE_SUPABASE_URL in .env.local is correct, then restart the dev server.`
-            : err?.message || 'Failed to login. Retry'
-        )
+        } catch (error) {
+        console.error('Error logging in:', error)
+        setError(error.message || 'Failed to login. Retry')
         } finally {
         setLoading(false);
         }
@@ -206,29 +196,6 @@ const LoginPage = ({ onSignup, onLoginSuccess }) => {
             >
             Sign up
             </button>
-        </p>
-        </div>
-
-        {/* Local demo access: reaches the analysis screen without Supabase auth.
-            Remove this block to make sign-in mandatory again. */}
-        <div style={{ marginTop: '12px', textAlign: 'center' }}>
-        <button
-            type="button"
-            onClick={onLoginSuccess}
-            style={{
-            background: 'none',
-            border: '1px solid #444',
-            borderRadius: '8px',
-            padding: '10px 18px',
-            color: '#b0b0b8',
-            cursor: 'pointer',
-            fontSize: '0.85rem',
-            }}
-        >
-            Continue as guest (skip sign-in)
-        </button>
-        <p style={{ fontSize: '0.75rem', color: '#666', marginTop: '8px' }}>
-            Demo mode — no account required.
         </p>
         </div>
         </div>
