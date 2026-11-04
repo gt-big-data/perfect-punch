@@ -4,7 +4,10 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 from openai import OpenAI
 import os, json, time, subprocess, sys
+import logging
 from datetime import datetime
+import psycopg
+from perfectpunch_backend.db.connection import DatabaseConfigurationError
 
 # Load environment variables from .env (if present). Keeps secrets/config out of source.
 load_dotenv()
@@ -22,7 +25,7 @@ app.add_middleware(
 )
 
 # Attempt to load optional in-process game router (provides in-memory game manager).
-# If it fails we fall back to supabase/DB-backed session retrieval paths.
+# If it fails, the local/demo session paths remain available.
 try:
     from .api.routers import game
     from .api.routers.game import game_manager
@@ -128,13 +131,61 @@ def start_punch_analysis():
             with open(metrics_file, "r") as f:
                 metrics = json.load(f)
             print(f"📊 Loaded metrics from {metrics_file}")
-            return {"status": "success", "metrics": metrics}
+
+            database_saved = False
+            saved_session_count = 0
+            if os.getenv("DATABASE_URL"):
+                if not isinstance(metrics, list):
+                    raise HTTPException(
+                        status_code=500,
+                        detail="session_metrics.json must contain a list of session records.",
+                    )
+
+                from perfectpunch_backend.services.game_session_service import (
+                    save_game_session,
+                )
+
+                try:
+                    for session in metrics:
+                        if not isinstance(session, dict) or not session.get("session_id"):
+                            raise HTTPException(
+                                status_code=500,
+                                detail="Each analysis session must contain a session_id.",
+                            )
+
+                        save_game_session({
+                            **session,
+                            "user_id": session.get("user_id") or "anonymous",
+                            "end_time": session.get("timestamp"),
+                        })
+                        saved_session_count += 1
+                except (DatabaseConfigurationError, psycopg.Error) as error:
+                    logging.exception("Failed to save analysis session to PostgreSQL")
+                    raise HTTPException(
+                        status_code=503,
+                        detail="Analysis completed, but its session could not be saved to PostgreSQL.",
+                    ) from error
+
+                database_saved = True
+            else:
+                logging.warning(
+                    "Analysis completed without database persistence because DATABASE_URL is unset."
+                )
+
+            return {
+                "status": "success",
+                "metrics": metrics,
+                "database_saved": database_saved,
+                "saved_session_count": saved_session_count,
+            }
         else:
             raise HTTPException(status_code=500, detail="session_metrics.json not found")
 
     except subprocess.TimeoutExpired:
         # Subprocess took too long — notify the caller
         raise HTTPException(status_code=500, detail="Analysis timeout - took too long")
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"❌ Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -163,21 +214,43 @@ def get_analysis_results():
 
 
 # -----------------------------
-#  PATCHED /session/latest
+#  Latest saved game session
 # -----------------------------
 @app.get("/session/latest")
 def get_latest_session(session_id: str = Query(None, description="Optional session ID to fetch")):
-    """Return the most recent REAL session formatted for the dashboard.
+    """Return the most recent saved session formatted for the dashboard.
 
     Resolution order:
-    1. Local `sessions/` folder (useful for offline/dev runs)
-    2. Supabase by `session_id` (if supplied)
-    3. Latest Supabase session
-    4. In-memory GameManager session (if the router is enabled)
-    5. Static demo fallback
+    1. PostgreSQL, when configured
+    2. Local `sessions/` folder (useful for offline/dev runs)
+    3. In-memory GameManager session (if the router is enabled)
+    4. Static demo fallback
     """
 
-    # 1) Try local saved session files first (for run_model.py local uploads)
+    # Prefer PostgreSQL when configured; do not mask connection failures with demo data.
+    if os.getenv("DATABASE_URL"):
+        try:
+            from perfectpunch_backend.services.game_session_service import (
+                get_game_session,
+                get_latest_session as get_latest_database_session,
+            )
+
+            saved_session = (
+                get_game_session(session_id)
+                if session_id
+                else get_latest_database_session()
+            )
+        except (DatabaseConfigurationError, psycopg.Error) as error:
+            logging.exception("Failed to read game session from PostgreSQL")
+            raise HTTPException(
+                status_code=503,
+                detail="Game session could not be loaded from the configured PostgreSQL database.",
+            ) from error
+
+        if saved_session:
+            return saved_session
+
+    # Try local saved session files for offline/dev runs.
     try:
         files = [f for f in os.listdir(SESSIONS_DIR) if f.endswith(".json")]
         if files:
@@ -194,38 +267,7 @@ def get_latest_session(session_id: str = Query(None, description="Optional sessi
     except Exception as e:
         print("⚠️ Error loading local session:", e)
 
-    # 2) If a session_id is provided, try fetching that exact session from Supabase
-    if session_id:
-        try:
-            from perfectpunch_backend.supabase_client import supabase
-
-            result = supabase.table("game_sessions").select("*") \
-                .eq("session_id", session_id).order("end_time", desc=True).limit(1).execute()
-
-            if result.data:
-                saved_session = result.data[0]
-            else:
-                saved_session = None
-
-            if saved_session:
-                print("📄 Loaded Supabase session by session_id")
-                return saved_session
-
-        except Exception as e:
-            print(f"⚠️ Error fetching from Supabase: {e}")
-
-    # 3) Try latest Supabase session if no session_id specified
-    if not session_id:
-        try:
-            from perfectpunch_backend.services.game_session_service import get_latest_session
-            latest = get_latest_session()
-            if latest:
-                print("📄 Loaded latest Supabase session")
-                return latest
-        except Exception as e:
-            print(f"⚠️ Error fetching latest Supabase session: {e}")
-
-    # 4) In-memory GameManager (used by the optional game router)
+    # In-memory GameManager (used by the optional game router).
     if session_id and GAME_MANAGER_AVAILABLE and game_manager:
         stats = game_manager.get_session_stats(session_id)
         session = game_manager.get_session(session_id)
@@ -238,7 +280,7 @@ def get_latest_session(session_id: str = Query(None, description="Optional sessi
                 "punches": [vars(a) for a in session.punch_attempts]
             }
 
-    # 5) Final fallback: static demo session (used when no real data is available)
+    # Static demo session (used when no real data is available).
     print("⚠️ Falling back to static demo session.")
     return {
         "session_id": "demo_001",

@@ -20,8 +20,8 @@ function AppContent() {
     setCurrentPage('signup')
   }
 
-  const handleLogin = () => {
-    setCurrentPage('login')
+  const openCoachingSession = () => {
+    setCurrentPage('landing')
   }
 
   const handleSignup = () => {
@@ -80,7 +80,7 @@ function AppContent() {
   return (
     <div>
       {currentPage === 'home' && (
-        <HomePage onNavigate={handleLogin} />
+        <HomePage onNavigate={openCoachingSession} />
       )}
 
       {currentPage === 'login' && (

@@ -3,8 +3,8 @@
 ## Data Storage Locations
 
 ### 1. **With Backend Running** (Your Current Setup)
-✅ **Supabase Database** (Primary Storage)
-- Location: Cloud database (Supabase)
+✅ **Azure Database for PostgreSQL** (Primary Storage)
+- Location: Azure PostgreSQL server
 - Table: `game_sessions`
 - When: Automatically when you click "End Game"
 - What's saved:
@@ -26,16 +26,16 @@
 - Location: Your browser's local storage
 - When: When you click "End Game" in demo mode
 - Key format: `demo_session_{session_id}`
-- What's saved: Same data structure as Supabase
+- What's saved: Same session data structure as the PostgreSQL backend
 
 ## How Dashboard Gets Data
 
 ### Flow When Backend is Running:
 
 1. **You play game** → Backend tracks everything in memory
-2. **You click "End Game"** → Backend saves to Supabase
+2. **You click "End Game"** → Backend saves to PostgreSQL
 3. **Dashboard loads** → Calls `/session/latest?session_id={your_session_id}`
-4. **Backend fetches** → Gets data from Supabase
+4. **Backend fetches** → Gets data from PostgreSQL
 5. **Dashboard displays** → Shows your actual game data
 
 ### Flow Without Backend (Demo Mode):
@@ -49,7 +49,7 @@
 
 ### ✅ YES, if:
 - You play a new game session (each session has unique ID)
-- Backend is running and saves to Supabase
+- Backend is running and saves to PostgreSQL
 - Dashboard fetches the correct session_id
 - Data is actually saved (check console logs)
 
@@ -57,14 +57,14 @@
 - You're viewing the same old session
 - Backend failed to save (check console for errors)
 - Dashboard is loading cached/old data
-- Supabase connection failed
+- PostgreSQL connection failed
 
 ## How to Verify Data is Saving
 
 ### Check Backend Logs:
 Look for these messages in the backend terminal:
 ```
-Session {session_id} saved to Supabase
+Session {session_id} saved to PostgreSQL
 ```
 
 ### Check Browser Console:
@@ -74,8 +74,8 @@ Look for:
 📊 Score saved: X, Targets hit: Y
 ```
 
-### Check Supabase (if configured):
-1. Go to your Supabase dashboard
+### Check Azure PostgreSQL (if configured):
+1. Connect to your Azure PostgreSQL database
 2. Check `game_sessions` table
 3. See your saved sessions
 
@@ -93,18 +93,17 @@ console.log(JSON.parse(localStorage.getItem(latest)));
 
 ## Current Status
 
-✅ **Backend is running** → Will save to Supabase  
-✅ **Supabase credentials set** → Connection should work  
-✅ **Dashboard configured** → Will fetch from Supabase or localStorage
+✅ **Backend is running** → Will save to PostgreSQL
+✅ **`DATABASE_URL` is set** → Connection should work
+✅ **Dashboard configured** → Will fetch from the backend or localStorage
 
 ## What Happens When You Play Now:
 
 1. **Start game** → Backend creates session
 2. **Play game** → Backend tracks via WebSocket
 3. **Hit targets** → Backend updates score in memory
-4. **End game** → Backend saves to Supabase ✅
-5. **Dashboard** → Fetches from Supabase ✅
+4. **End game** → Backend saves to PostgreSQL ✅
+5. **Dashboard** → Fetches from PostgreSQL ✅
 6. **Metrics change** → Shows your new game data ✅
 
 **Your dashboard metrics WILL change** when you play a new game session!
-

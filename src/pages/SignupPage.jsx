@@ -1,42 +1,7 @@
-import React, { useState, useRef, useEffect } from "react";
-import { createClient } from "@supabase/supabase-js";
+import React, { useState } from "react";
+import { supabase } from "../config/supabase";
 
-export default function Signup() {
-  const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
-  const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
-  const supabaseRef = useRef(null);
-
-  useEffect(() => {
-    if (SUPABASE_URL && SUPABASE_ANON_KEY) {
-      try {
-        supabaseRef.current = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-      } catch (err) {
-        // If createClient throws, keep ref null and log for debugging
-        console.error("Failed to create Supabase client:", err);
-        supabaseRef.current = null;
-      }
-    }
-  }, [SUPABASE_URL, SUPABASE_ANON_KEY]);
-
-  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
-    return (
-      <div style={{ padding: 24, fontFamily: 'system-ui, -apple-system', minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <div style={{ maxWidth: 680 }}>
-          <h2 style={{ marginTop: 0 }}>Supabase configuration missing</h2>
-          <p style={{ color: '#444' }}>
-            The VITE_SUPABASE_URL and/or VITE_SUPABASE_ANON_KEY environment variables are not available in the frontend.
-            Make sure <code>.env.local</code> exists at the project root and contains:
-          </p>
-          <pre style={{ background: '#f3f4f6', padding: 12, borderRadius: 6 }}>
-VITE_SUPABASE_URL=your-supabase-url
-VITE_SUPABASE_ANON_KEY=your-anon-key
-          </pre>
-          <p style={{ color: '#444' }}>Then restart the dev server: <code>npm run dev</code></p>
-        </div>
-      </div>
-    );
-  }
-
+export default function Signup({ onNavigate, onSignupSuccess }) {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -46,36 +11,39 @@ VITE_SUPABASE_ANON_KEY=your-anon-key
   const handleSubmit = async (e) => {
     e.preventDefault();
     setMessage(null);
-    setBusy(true);
 
-    const supabase = supabaseRef.current;
     if (!supabase) {
-      setMessage({ type: "error", text: "Supabase client not initialized. Check console." });
-      setBusy(false);
+      setMessage({
+        type: "error",
+        text: "Sign-up is not configured yet. Add the Supabase keys in the site settings.",
+      });
       return;
     }
 
+    setBusy(true);
     try {
-      const { data, error } = await supabase.auth.signUp(
-        { email, password, options: {data : {full_name: name,},}},
-      );
+      const { error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: { data: { full_name: name } },
+      });
 
       if (error) {
         setMessage({ type: "error", text: error.message });
-        setBusy(false);
         return;
       }
 
-      setMessage({ type: "success", text: "Success! Redirecting…" });
+      setMessage({ type: "success", text: "Account created. You can sign in now." });
       setName("");
       setEmail("");
       setPassword("");
-      setBusy(false);
-
-      setTimeout(() => { window.location.href = "/"; }, 900);
+      if (onSignupSuccess) {
+        setTimeout(() => onSignupSuccess(), 900);
+      }
     } catch (err) {
       console.error(err);
       setMessage({ type: "error", text: "Unexpected error. Check console." });
+    } finally {
       setBusy(false);
     }
   };
@@ -109,7 +77,17 @@ VITE_SUPABASE_ANON_KEY=your-anon-key
           {busy ? "Signing up…" : "Sign up"}
         </button>
 
-        <div style={{ fontSize: 12, color:"#666", marginTop:8 }}>A magic link or confirmation email may be sent depending on your Supabase settings.</div>
+        {onNavigate && (
+          <button
+            type="button"
+            onClick={onNavigate}
+            style={{ marginTop: 10, width: "100%", padding: 10, background: "transparent", color: "#444", border: "1px solid #e6e9ef", borderRadius: 8, cursor: "pointer" }}
+          >
+            Back
+          </button>
+        )}
+
+        <div style={{ fontSize: 12, color:"#666", marginTop:8 }}>A confirmation email may be sent depending on your Supabase settings.</div>
 
         {message && (
           <div style={{ marginTop: 12, color: message.type === "error" ? "#b00020" : "#006d32" }}>

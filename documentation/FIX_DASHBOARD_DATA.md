@@ -24,7 +24,7 @@ Your dashboard is showing `Session: demo_001 | 11/17/2025, 9:00:00 AM` which is 
 ✅ Fixed import paths in game router  
 ✅ Added better error handling  
 ✅ Added logging to track data flow  
-✅ Fixed Supabase import errors
+✅ Replaced Supabase session persistence with PostgreSQL
 
 ## How to Test Now
 
@@ -34,7 +34,7 @@ Your dashboard is showing `Session: demo_001 | 11/17/2025, 9:00:00 AM` which is 
    - Load dashboard → Should see "Loading demo session data"
 
 2. **Check backend terminal** for:
-   - "Session {id} saved to Supabase" (if backend works)
+   - Successful PostgreSQL session save (if backend is configured)
    - Or import errors (if still broken)
 
 3. **Play a NEW game**:
@@ -71,4 +71,3 @@ The dashboard shows `demo_001` because:
    - API call fails
 
 **Solution**: Make sure you're playing a NEW game session (not refreshing an old one), and check the console logs to see where the data flow breaks.
-

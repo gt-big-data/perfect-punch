@@ -1,0 +1,6 @@
+requirements.txt
+**/*.py
+perfectpunch_backend
+documentation
+.github
+*.pt

@@ -3,7 +3,7 @@ import { Pose } from '@mediapipe/pose';
 import { Camera } from '@mediapipe/camera_utils';
 import { useAuth } from '../contexts/AuthContext';
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000';
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '';
 
 const PUNCH_COLORS = {
   jab: '#FF0000',    // red
@@ -44,6 +44,12 @@ export default function CameraMirror({ onNavigate, onGoToDashboard }) {
   });
 
   const scoreRef = useRef(0);
+  const gameDataRef = useRef({
+    punchAttempts: [],
+    targetsHit: 0,
+    targetsSpawned: 0,
+    startTime: null
+  });
   const timeRef = useRef(30);
   const targetRef = useRef(null);
   const timerIntervalRef = useRef(null);
@@ -56,6 +62,10 @@ export default function CameraMirror({ onNavigate, onGoToDashboard }) {
   useEffect(() => {
     scoreRef.current = score;
   }, [score]);
+
+  useEffect(() => {
+    gameDataRef.current = gameData;
+  }, [gameData]);
   
   useEffect(() => {
     timeRef.current = timeRemaining;
@@ -99,6 +109,10 @@ export default function CameraMirror({ onNavigate, onGoToDashboard }) {
     };
 
     const initializeLiveSession = async () => {
+      if (!API_BASE_URL) {
+        return { mode: 'demo' };
+      }
+
       try {
         const createResponse = await fetch(buildHttpUrl('/game/sessions'), {
           method: 'POST',
@@ -212,6 +226,17 @@ export default function CameraMirror({ onNavigate, onGoToDashboard }) {
 
     const startDemoMode = () => {
       const demoSessionId = `demo-${Date.now()}`;
+      const startedAt = Date.now();
+      const initialGameData = {
+        punchAttempts: [],
+        targetsHit: 0,
+        targetsSpawned: 0,
+        startTime: startedAt
+      };
+      sessionIdRef.current = demoSessionId;
+      isDemoModeRef.current = true;
+      gameDataRef.current = initialGameData;
+      gameStartTimeRef.current = startedAt;
       setSessionId(demoSessionId);
       setIsDemoMode(true);
       setScore(0);
@@ -220,13 +245,7 @@ export default function CameraMirror({ onNavigate, onGoToDashboard }) {
       setCurrentTarget(null);
       landmarkBufferRef.current = [];
       hitTargetsRef.current.clear();
-      gameStartTimeRef.current = Date.now();
-      setGameData({
-        punchAttempts: [],
-        targetsHit: 0,
-        targetsSpawned: 0,
-        startTime: gameStartTimeRef.current
-      });
+      setGameData(initialGameData);
       startDemoGame();
     };
 
@@ -323,13 +342,10 @@ export default function CameraMirror({ onNavigate, onGoToDashboard }) {
     
     // Spawn targets every 2-4 seconds
     targetSpawnIntervalRef.current = setInterval(() => {
-      setTimeRemaining((prev) => {
-        if (prev > 0) {
-          spawnTarget();
-        }
-        return prev;
-      });
-    }, 2000 + Math.random() * 2000);
+      if (timeRef.current > 0) {
+        spawnTarget();
+      }
+    }, 3000);
   };
 
   // Handle target hits in demo mode
@@ -542,7 +558,7 @@ export default function CameraMirror({ onNavigate, onGoToDashboard }) {
   }, []); // Run once on mount, camera should start regardless of sessionId
   
   const calculatePunchAccuracy = () => {
-    const attempts = gameData.punchAttempts;
+    const attempts = gameDataRef.current.punchAttempts;
     const byType = { jab: [], hook: [], uppercut: [] };
     
     attempts.forEach(attempt => {
@@ -565,7 +581,7 @@ export default function CameraMirror({ onNavigate, onGoToDashboard }) {
   };
 
   const calculateReactionTimes = () => {
-    const attempts = gameData.punchAttempts;
+    const attempts = gameDataRef.current.punchAttempts;
     const byType = { jab: [], hook: [], uppercut: [] };
     
     attempts.forEach(attempt => {
@@ -588,11 +604,12 @@ export default function CameraMirror({ onNavigate, onGoToDashboard }) {
     const intervals = 5;
     const intervalDuration = elapsed / intervals;
     const timeline = [];
+    const attempts = gameDataRef.current.punchAttempts;
     
     for (let i = 0; i < intervals; i++) {
       const intervalStart = i * intervalDuration;
       const intervalEnd = (i + 1) * intervalDuration;
-      const intervalAttempts = gameData.punchAttempts.filter(a => {
+      const intervalAttempts = attempts.filter(a => {
         const attemptTime = (a.timestamp - gameStartTimeRef.current) / 1000;
         return attemptTime >= intervalStart && attemptTime < intervalEnd;
       });
@@ -620,13 +637,15 @@ export default function CameraMirror({ onNavigate, onGoToDashboard }) {
       clearInterval(targetSpawnIntervalRef.current);
     }
     
+    const activeSessionId = sessionIdRef.current;
+
     // Store demo game data in localStorage for dashboard
-    if (isDemoModeRef.current && sessionId) {
+    if (isDemoModeRef.current && activeSessionId) {
       const finalScore = scoreRef.current;
-      const finalGameData = gameData;
+      const finalGameData = gameDataRef.current;
       
       console.log('Saving demo session data:', {
-        sessionId,
+        sessionId: activeSessionId,
         finalScore,
         targetsHit: finalGameData.targetsHit,
         targetsSpawned: finalGameData.targetsSpawned,
@@ -634,7 +653,7 @@ export default function CameraMirror({ onNavigate, onGoToDashboard }) {
       });
       
       const demoSessionData = {
-        session_id: sessionId,
+        session_id: activeSessionId,
         timestamp: new Date().toISOString(),
         summary: {
           score: finalScore,
@@ -660,7 +679,7 @@ export default function CameraMirror({ onNavigate, onGoToDashboard }) {
         timeline: generateTimeline()
       };
       
-      localStorage.setItem(`demo_session_${sessionId}`, JSON.stringify(demoSessionData));
+      localStorage.setItem(`demo_session_${activeSessionId}`, JSON.stringify(demoSessionData));
       console.log('✅ Demo session data saved to localStorage:', demoSessionData);
       console.log('📊 Score saved:', finalScore, 'Targets hit:', finalGameData.targetsHit);
     }
@@ -671,9 +690,9 @@ export default function CameraMirror({ onNavigate, onGoToDashboard }) {
     }
     
     // Try to end session on backend (optional, don't block navigation)
-    if (sessionId && !sessionId.startsWith('demo-')) {
+    if (API_BASE_URL && activeSessionId && !activeSessionId.startsWith('demo-')) {
       try {
-        const response = await fetch(buildHttpUrl(`/game/sessions/${sessionId}/end`), {
+        const response = await fetch(buildHttpUrl(`/game/sessions/${activeSessionId}/end`), {
           method: 'POST',
         });
         
@@ -690,8 +709,8 @@ export default function CameraMirror({ onNavigate, onGoToDashboard }) {
     // Always navigate to dashboard, regardless of sessionId or backend status
     setCurrentTarget(null);
     setTimeRemaining(0);
-    console.log('Navigating to dashboard with sessionId:', sessionId);
-    onGoToDashboard(sessionId || null);
+    console.log('Navigating to dashboard with sessionId:', activeSessionId);
+    onGoToDashboard(activeSessionId || null);
   };
   
   const extractLandmarks = (landmarks, width, height) => {

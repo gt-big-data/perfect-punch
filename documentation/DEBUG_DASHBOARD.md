@@ -46,9 +46,9 @@ The session_id should be passed from camera to dashboard:
 2. Score isn't being saved (check console logs)
 3. Wrong session_id being loaded (check localStorage keys)
 
-### Issue: Supabase not connected
-**This is OK!** Demo mode works without Supabase. It saves to localStorage instead.
-- Supabase is only needed if backend is running
+### Issue: PostgreSQL not connected
+**This is OK for demo mode.** It saves to localStorage instead.
+- PostgreSQL is needed only when using the backend for persistent sessions
 - Demo mode (no backend) uses localStorage
 - Both work fine for displaying data
 
@@ -87,4 +87,3 @@ keys.forEach(key => {
   console.log(key, 'Score:', data.summary?.score);
 });
 ```
-

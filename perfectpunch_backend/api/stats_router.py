@@ -1,9 +1,9 @@
 from fastapi import APIRouter
-from perfectpunch_backend.supabase_client import supabase
+
+from perfectpunch_backend.services.game_session_service import get_game_sessions
 
 router = APIRouter()
 
 @router.get("/stats")
 def get_stats():
-    response = supabase.table("game_sessions").select("*").order("created_at", desc=True).execute()
-    return response.data
+    return get_game_sessions()

@@ -86,6 +86,11 @@ const LoginPage = ({ onSignup, onLoginSuccess }) => {
         try {
         setLoading(true);
         setError('');
+
+        if (!supabase) {
+            setError('Sign-in is not configured yet. Add the Supabase keys in the site settings.');
+            return;
+        }
         
         const { data, error } = await supabase.auth.signInWithPassword({
             email,

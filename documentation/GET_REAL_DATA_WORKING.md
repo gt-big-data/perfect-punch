@@ -27,24 +27,21 @@ Your dashboard shows static `demo_001` data instead of your actual game data.
   Object.keys(localStorage).filter(k => k.startsWith('demo_session_'))
   ```
 
-### Option 2: Fix Backend (For Supabase Storage)
+### Option 2: Use Backend (For PostgreSQL Storage)
 
-The backend has import errors preventing sessions from being created.
+Configure `DATABASE_URL` for Azure Database for PostgreSQL, apply the migrations
+documented in the README, then start the API from the repository root:
 
-**Quick Fix:**
-1. The backend is trying to import GameManager but failing
-2. This causes `/game/sessions` to return 404
-3. Frontend falls back to demo mode (which works!)
-
-**To fix backend:**
-- The imports need to be fixed in `game_manager.py`
-- But demo mode works fine without backend!
+```powershell
+uvicorn perfectpunch_backend.main:app --reload
+```
 
 ## Recommendation
 
-**Use Demo Mode for now** - it works and saves your data to localStorage. The dashboard will show your real game data.
+Use demo mode when no backend is needed; it saves session data to localStorage.
+Use the backend when sessions need to persist in PostgreSQL.
 
-The backend can be fixed later if you need Supabase storage, but localStorage works perfectly for development and testing.
+For persistent backend storage, configure `DATABASE_URL` for Azure Database for PostgreSQL and apply the database migrations. LocalStorage remains available for development and testing.
 
 ## Test It Now
 
@@ -54,4 +51,3 @@ The backend can be fixed later if you need Supabase storage, but localStorage wo
 4. Check dashboard - should show YOUR session_id and YOUR score
 
 If it still shows `demo_001`, check the console logs to see what session_id the dashboard is looking for.
-

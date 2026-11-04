@@ -127,10 +127,15 @@ const DashboardPage = ({ onNavigate, sessionId = null, metricsData = null }) => 
         }
       }
 
-      // 3️⃣ THIRD: Try API endpoint
+      // 3️⃣ THIRD: Try API endpoint when a backend URL is configured
+      const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
+      if (!API_BASE_URL) {
+        setSessionData(null);
+        setLoading(false);
+        return;
+      }
+
       try {
-        const API_BASE_URL =
-          import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
 
         let url = `${API_BASE_URL}/session/latest`;
         if (sessionId) {
@@ -162,7 +167,7 @@ const DashboardPage = ({ onNavigate, sessionId = null, metricsData = null }) => 
     }
 
     fetchData();
-  }, [sessionId]);
+  }, [sessionId, metricsData]);
 
   // ---------------------------------------------------------
   // ⚠️ LOADING OR ERROR STATES

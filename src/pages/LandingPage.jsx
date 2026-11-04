@@ -134,8 +134,16 @@ const LandingPage = ({ onNavigate, onBackToHome }) => {
   const handleStartAnalysis = async () => {
     setIsAnalyzing(true);
     setError(null);
+
+    const apiBaseUrl = import.meta.env.VITE_API_BASE_URL;
+    if (!apiBaseUrl) {
+      onNavigate('camera');
+      setIsAnalyzing(false);
+      return;
+    }
+
     try {
-      const response = await fetch('http://localhost:8000/analysis/start', {
+      const response = await fetch(`${apiBaseUrl.replace(/\/$/, '')}/analysis/start`, {
         method: 'POST',
       });
 
@@ -237,7 +245,15 @@ const LandingPage = ({ onNavigate, onBackToHome }) => {
       onNavigate('dashboard', transformedMetrics);
     } catch (err) {
       console.error('Error starting analysis:', err);
-      setError(err.message || 'Failed to start analysis. Make sure the backend is running.');
+      const message = err?.message || '';
+      const backendDown =
+        err instanceof TypeError ||
+        /failed to fetch|networkerror|load failed/i.test(message);
+      if (backendDown) {
+        onNavigate('camera');
+        return;
+      }
+      setError(message || 'Failed to start analysis. Make sure the backend is running.');
     } finally {
       setIsAnalyzing(false);
     }

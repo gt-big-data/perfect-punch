@@ -22,10 +22,22 @@ try:
         respawn_target,
         wrists_hit_circle,
         choose_punch_type,
+        choose_punch_side,
+        callout_text,
         PUNCH_COLORS,
-        choose_target_glove_key,
-        draw_target_glove,
-        load_target_glove_image,
+        MISS_GRAY,
+        WHITE,
+        FloatingText,
+        spawn_particles,
+        draw_particles,
+        draw_floating_texts,
+        draw_callout_banner,
+        draw_osu_target,
+        draw_target_badge,
+        draw_pop,
+        draw_fading_target,
+        draw_hud,
+        draw_hit_vignette,
     )
 except ImportError:
     from extractDataPoints import PoseTracker
@@ -34,14 +46,60 @@ except ImportError:
         respawn_target,
         wrists_hit_circle,
         choose_punch_type,
+        choose_punch_side,
+        callout_text,
         PUNCH_COLORS,
-        choose_target_glove_key,
-        draw_target_glove,
-        load_target_glove_image,
+        MISS_GRAY,
+        WHITE,
+        FloatingText,
+        spawn_particles,
+        draw_particles,
+        draw_floating_texts,
+        draw_callout_banner,
+        draw_osu_target,
+        draw_target_badge,
+        draw_pop,
+        draw_fading_target,
+        draw_hud,
+        draw_hit_vignette,
     )
 
 # Show OpenCV window by default; set SHOW_DISPLAY=false to force headless mode.
 SHOW_DISPLAY = os.getenv('SHOW_DISPLAY', 'true').strip().lower() in {'1', 'true', 'yes', 'on'}
+
+# ════════════════════════════════════════════════════════════════════════════
+# GAME / UI CONFIG — all the tunables for the callout → target → attack flow.
+# Attack-specific values (color, flash count, warning/active lengths, sizes)
+# live at the top of defense.py.
+# ════════════════════════════════════════════════════════════════════════════
+STANCE              = "orthodox"   # "orthodox" (lead = left) or "southpaw" (lead = right)
+ALLOW_RANDOM_SIDES  = False        # True = random L/R for every punch (needs a model trained on both hands)
+
+CALLOUT_DURATION_S  = 0.4          # "LEFT JAB" banner time before the target appears
+APPROACH_DURATION_S = 1.0          # approach ring shrink time; ring touches the edge = ideal hit
+PERFECT_WINDOW_S    = 0.10         # ± around the ideal hit time
+GOOD_WINDOW_S       = 0.25         # ± around the ideal hit time; outside this = MISS
+
+TARGET_VISUAL_SCALE = 2.5          # drawn radius = TARGET_RADIUS * this
+HIT_RADIUS_SCALE    = 3.0          # collision radius = TARGET_RADIUS * this (TODO(tune))
+MAX_SAME_TARGET_IN_A_ROW = 2       # never the same punch type + side more than this many times in a row
+
+SCORE_PERFECT        = 300
+SCORE_GOOD           = 100
+SCORE_DEFENSE_BONUS  = 50          # successful dodge or block
+SCORE_HIT_PENALTY    = 50          # getting hit (score never drops below 0)
+
+FLOATING_TEXT_S = 0.6
+POP_S           = 0.25
+MISS_FADE_S     = 0.3
+HIT_VIGNETTE_S  = 0.3
+SCHEDULE_MARGIN_S = 0.1            # spacing between attack windows and punch moments
+
+GRADE_COLORS = {
+    "PERFECT": (0, 230, 255),      # gold
+    "GOOD":    (255, 255, 255),
+    "MISS":    MISS_GRAY,
+}
 
 # ── Model / pipeline constants (must match training config) ─────────────────
 CLIP_FRAMES          = 50
@@ -107,8 +165,24 @@ def _get_time_window_index(elapsed_seconds):
     return None
 
 
-def _get_spawn_timing(now, protect_seconds):
-    return now, now, now + protect_seconds
+def _windows_overlap(a, b, margin=0.0):
+    """True if time windows a=(start, end) and b=(start, end) overlap (with margin)."""
+    if a is None or b is None:
+        return False
+    return a[0] < b[1] + margin and a[1] > b[0] - margin
+
+
+def _pick_next_target(recent):
+    """Pick (punch_type, side), never repeating the same pair more than
+    MAX_SAME_TARGET_IN_A_ROW times in a row."""
+    punch_type, side = None, None
+    for _ in range(25):
+        punch_type = choose_punch_type()
+        side = choose_punch_side(punch_type, STANCE, ALLOW_RANDOM_SIDES)
+        if len(recent) < MAX_SAME_TARGET_IN_A_ROW or any(r != (punch_type, side) for r in recent):
+            break
+    recent.append((punch_type, side))
+    return punch_type, side
 
 
 # ── Speed computation (2-D pixel coords, kept for session metrics) ───────────
@@ -462,21 +536,30 @@ print(f"Camera FPS: {actual_fps:.1f}")
 tracker = PoseTracker(max_frames=WORLD_BUFFER_FRAMES, pose=shared_pose)
 world_frame_buffer: deque = deque(maxlen=WORLD_BUFFER_FRAMES)
 
-glove_images = {
-    key: load_target_glove_image(key)
-    for key in ("jab_front", "hook_left", "hook_right", "uppercut_up")
-}
-
 TARGET_CENTER    = None
 CURRENT_TYPE     = None
-TARGET_GLOVE_KEY = None
+CURRENT_SIDE     = None
 TARGET_RADIUS    = 25
-SPAWN_PROTECT_S  = 1
+TARGET_VISUAL_RADIUS = int(TARGET_RADIUS * TARGET_VISUAL_SCALE)
 TARGET_RESPAWN_DELAY_S = 2.0
-last_spawn_ts    = 0.0
-circle_spawn_ts  = None
-protect_release_ts = None
+circle_spawn_ts  = None          # when the target appeared (reaction time reference)
+ideal_hit_ts     = None          # when the approach ring meets the target edge
+hand_inside_prev = True          # was the punching hand inside the target last frame?
 next_target_spawn_ts = 0.0
+# Target flow: "idle" -> "callout" (banner) -> "active" (osu! target) -> "idle"
+target_phase     = "idle"
+callout_start_ts = None
+recent_targets   = deque(maxlen=MAX_SAME_TARGET_IN_A_ROW)
+# Time windows (start, end) when attacks must not be in their active phase.
+reserved_windows = []
+
+# Score and on-screen effects
+score            = 0
+floating_texts   = []            # FloatingText list (drawn after the flip)
+particles        = []            # hit particle bursts (camera coords)
+pops             = []            # (center, color, start_ts) for hit pops
+fading_targets   = []            # (center, start_ts) for missed targets
+hit_vignette_until = 0.0
 # Tracks how many frames were in world_frame_buffer when the current target
 # spawned.  At collision we slice [spawn_buf_len:] so only frames from the
 # current punch are fed to extract_live_clip — matching the notebook which
@@ -501,6 +584,7 @@ reaction_window_combined = [[] for _ in range(3)]
 speed_by_type          = {k: [] for k in reaction_time_punch}
 speed_windows          = [{k: [] for k in reaction_time_punch} for _ in range(3)]
 speed_window_combined  = [[] for _ in range(3)]
+target_timing          = {k: {"perfect": 0, "good": 0, "miss": 0} for k in reaction_time_punch}
 coverage_tracker = {
     "head": {"covered": 0, "total": 0},
     "body": {"covered": 0, "total": 0},
@@ -813,29 +897,82 @@ while cap.isOpened():
     # quick pixel-based speed calculations.
     update_tracker_from_landmarks(tracker, landmarks, w, h)
 
-    # --- Target spawn logic ----------------------------------------------
-    # If there is no current target and the spawn timer allows it, compute
-    # a new target center based on the player's pose and select its type.
-    if TARGET_CENTER is None and landmarks is not None and now >= next_target_spawn_ts:
-        TARGET_CENTER    = respawn_target(landmarks, w, h, TARGET_RADIUS)
-        CURRENT_TYPE     = choose_punch_type()
-        TARGET_GLOVE_KEY = choose_target_glove_key(CURRENT_TYPE)
-        print(CURRENT_TYPE)
-        last_spawn_ts, circle_spawn_ts, protect_release_ts = _get_spawn_timing(now, SPAWN_PROTECT_S)
-        # Record the world buffer length at spawn so inference later uses
-        # only frames captured since this spawn (one punch per clip).
-        spawn_buf_len = len(world_frame_buffer)
+    # Drop reserved windows that are already over.
+    reserved_windows = [win for win in reserved_windows if win[1] > now]
 
-    # --- Collision detection (player action vs. target) ------------------
-    collide   = False
-    protecting = protect_release_ts is not None and now < protect_release_ts
-    if landmarks is not None and TARGET_CENTER is not None and not protecting:
-        collide = wrists_hit_circle(landmarks, w, h, TARGET_CENTER, TARGET_RADIUS)
+    # --- Target flow step 1: start a callout ------------------------------
+    # When the respawn timer allows it, pick the next punch and flash its
+    # name. The target itself only appears once the banner is gone.
+    if target_phase == "idle" and landmarks is not None and now >= next_target_spawn_ts:
+        callout_end    = now + CALLOUT_DURATION_S
+        planned_hit    = callout_end + APPROACH_DURATION_S
+        planned_window = (planned_hit - GOOD_WINDOW_S, planned_hit + GOOD_WINDOW_S)
+        attack_window  = defense_game.get_active_window()
+        # Never ask for a punch while an attack is in its solid (dodge) phase.
+        if not (_windows_overlap(attack_window, (now, callout_end), SCHEDULE_MARGIN_S)
+                or _windows_overlap(attack_window, planned_window, SCHEDULE_MARGIN_S)):
+            CURRENT_TYPE, CURRENT_SIDE = _pick_next_target(recent_targets)
+            target_phase     = "callout"
+            callout_start_ts = now
+            reserved_windows.append((now, callout_end))
+            reserved_windows.append(planned_window)
+            print(f"Callout: {callout_text(CURRENT_TYPE, CURRENT_SIDE)}")
+
+    # --- Target flow step 2: callout over -> spawn the osu! target --------
+    if target_phase == "callout" and now >= callout_start_ts + CALLOUT_DURATION_S and landmarks is not None:
+        center = respawn_target(landmarks, w, h, TARGET_RADIUS,
+                                side=CURRENT_SIDE, margin=TARGET_VISUAL_RADIUS + 6,
+                                avoid_hands_px=int(TARGET_RADIUS * HIT_RADIUS_SCALE) + 20)
+        if center is not None:
+            TARGET_CENTER   = center
+            circle_spawn_ts = now
+            ideal_hit_ts    = now + APPROACH_DURATION_S
+            target_phase    = "active"
+            hand_inside_prev = True     # a hand already on the target at spawn doesn't count
+            # Keep the real hit window reserved (it shifts if the spawn was delayed).
+            reserved_windows.append((ideal_hit_ts - GOOD_WINDOW_S, ideal_hit_ts + GOOD_WINDOW_S))
+            # Record the world buffer length at spawn so inference later uses
+            # only frames captured since this spawn (one punch per clip).
+            spawn_buf_len = len(world_frame_buffer)
+
+    # --- Collision detection + timing grade ------------------------------
+    # Contacts before the hit window opens are ignored (the guard naturally
+    # sits near the targets); no hit by the end of the window is a MISS.
+    # A hit must be the hand ENTERING the target inside the window: a guard
+    # that is already resting on the target doesn't count, so the player has
+    # to actually throw the punch.
+    collide    = False
+    hit_grade  = None
+    if target_phase == "active":
+        window_open  = now >= ideal_hit_ts - GOOD_WINDOW_S
+        window_close = ideal_hit_ts + GOOD_WINDOW_S
+        if landmarks is not None:
+            hand_inside = wrists_hit_circle(landmarks, w, h, TARGET_CENTER, TARGET_RADIUS,
+                                            hit_radius_scale=HIT_RADIUS_SCALE, side=CURRENT_SIDE)
+            if window_open and now <= window_close and hand_inside and not hand_inside_prev:
+                collide = True
+            hand_inside_prev = hand_inside
+        if collide:
+            hit_grade = "PERFECT" if abs(now - ideal_hit_ts) <= PERFECT_WINDOW_S else "GOOD"
+        elif now > window_close:
+            # --- MISS: target expires, no model inference ---------------
+            target_timing[CURRENT_TYPE]["miss"] += 1
+            fading_targets.append((TARGET_CENTER, now))
+            floating_texts.append(FloatingText("MISS", TARGET_CENTER, GRADE_COLORS["MISS"], now,
+                                               duration=FLOATING_TEXT_S, scale=1.1))
+            print(f"MISS ({callout_text(CURRENT_TYPE, CURRENT_SIDE)})")
+            TARGET_CENTER   = None
+            CURRENT_TYPE    = None
+            CURRENT_SIDE    = None
+            ideal_hit_ts    = None
+            spawn_buf_len   = 0
+            target_phase    = "idle"
+            next_target_spawn_ts = now + TARGET_RESPAWN_DELAY_S
 
     # --- On-collision: metrics collection + prepare inference ------------
-    if not protecting and collide:
-        # Reaction time relative to when the target became hittable
-        reference_time = circle_spawn_ts if circle_spawn_ts is not None else protect_release_ts
+    if collide:
+        # Reaction time relative to when the target appeared
+        reference_time = circle_spawn_ts
         reaction_time  = now - reference_time
 
         # Record reaction time globally and per time-window
@@ -911,7 +1048,8 @@ while cap.isOpened():
 
         # --- Build overlay text and reset target state -------------------
         if predicted_punch is not None and confidence is not None:
-            confidence_flag = "" if is_confident else " \u26A0\uFE0F"
+            # Hershey fonts can't draw emoji, so flag low confidence in plain text.
+            confidence_flag = "" if is_confident else " (low)"
             prediction_overlay_text  = (f"Predicted: {predicted_punch.title()} "
                                         f"({confidence:.0%}){confidence_flag}")
             prediction_overlay_color = (0, 255, 0) if is_confident else (0, 165, 255)
@@ -921,30 +1059,83 @@ while cap.isOpened():
             prediction_overlay_color = (220, 220, 220)
         prediction_overlay_until = now + PREDICTION_OVERLAY_SECONDS
 
+        # --- Timing grade, score and hit effects --------------------------
+        grade_key = hit_grade.lower()
+        target_timing[CURRENT_TYPE][grade_key] += 1
+        score += SCORE_PERFECT if hit_grade == "PERFECT" else SCORE_GOOD
+        punch_color = PUNCH_COLORS.get(CURRENT_TYPE, WHITE)
+        floating_texts.append(FloatingText(hit_grade, TARGET_CENTER, GRADE_COLORS[hit_grade], now,
+                                           duration=FLOATING_TEXT_S,
+                                           scale=1.4 if hit_grade == "PERFECT" else 1.2))
+        pops.append((TARGET_CENTER, punch_color, now))
+        particles.extend(spawn_particles(TARGET_CENTER, punch_color, now, count=12))
+        print(f"{hit_grade} ({callout_text(CURRENT_TYPE, CURRENT_SIDE)}) "
+              f"{(now - ideal_hit_ts) * 1000:+.0f} ms from ideal")
+
         # Clear the current target and schedule next spawn
         TARGET_CENTER    = None
         CURRENT_TYPE     = None
-        TARGET_GLOVE_KEY = None
+        CURRENT_SIDE     = None
+        ideal_hit_ts     = None
+        target_phase     = "idle"
         spawn_buf_len    = 0
         next_target_spawn_ts = now + TARGET_RESPAWN_DELAY_S
         print(f"Next target in {TARGET_RESPAWN_DELAY_S:.1f}s")
         print(correct_by_type)
         print(attempts_by_type)
 
-    # --- Render target (glove image or fallback circle) ------------------
-    if TARGET_CENTER is not None and CURRENT_TYPE is not None:
-        glove_image = glove_images.get(TARGET_GLOVE_KEY)
-        if glove_image is not None:
-            draw_target_glove(image, TARGET_CENTER, TARGET_RADIUS, glove_image, TARGET_GLOVE_KEY)
+    # --- Defense drill update (telegraphed attacks: visual + stats) -----
+    # Drawn first so the punch target stays on top of an attack band.
+    defense_outcome = defense_game.update(image, landmarks, now, reserved_windows=reserved_windows)
+    if defense_outcome is not None and defense_game.last_event is not None:
+        event_pos = defense_game.last_event["pos"]
+        if defense_outcome == "Hit":
+            score = max(0, score - SCORE_HIT_PENALTY)
+            hit_vignette_until = now + HIT_VIGNETTE_S
+            floating_texts.append(FloatingText("HIT!", event_pos, (60, 60, 255), now,
+                                               duration=FLOATING_TEXT_S, scale=1.2))
         else:
-            color = PUNCH_COLORS.get(CURRENT_TYPE, (0, 0, 255))
-            cv2.circle(image, TARGET_CENTER, TARGET_RADIUS, color, -1)
+            score += SCORE_DEFENSE_BONUS
+            label = "DODGED!" if defense_outcome == "Dodge" else "BLOCKED!"
+            floating_texts.append(FloatingText(label, event_pos, WHITE, now,
+                                               duration=FLOATING_TEXT_S, scale=1.2))
+        print(f"Defense: {defense_outcome}")
 
-    # --- Flying-blocks defense drill update (visual + stats) ----------
-    defense_game.update(image, landmarks, now)
+    # --- Render target effects (camera orientation, before the flip) -----
+    fading_targets = [(c, t0) for (c, t0) in fading_targets if now - t0 <= MISS_FADE_S]
+    for center, t0 in fading_targets:
+        draw_fading_target(image, center, TARGET_VISUAL_RADIUS, now - t0, MISS_FADE_S)
+
+    pops = [(c, col, t0) for (c, col, t0) in pops if now - t0 <= POP_S]
+    for center, col, t0 in pops:
+        draw_pop(image, center, TARGET_VISUAL_RADIUS, col, now - t0, POP_S)
+
+    particles = draw_particles(image, particles, now)
+
+    # --- Render the active osu!-style target ----------------------------
+    if target_phase == "active" and TARGET_CENTER is not None:
+        approach_progress = (now - circle_spawn_ts) / APPROACH_DURATION_S
+        draw_osu_target(image, TARGET_CENTER, TARGET_VISUAL_RADIUS,
+                        PUNCH_COLORS.get(CURRENT_TYPE, WHITE), approach_progress)
 
     # --- Display preparation (mirror for user-facing view) ------------
     display_image = cv2.flip(image, 1)
+    disp_h, disp_w = display_image.shape[:2]
+
+    # All text is drawn after the flip so it reads correctly.
+    if target_phase == "active" and TARGET_CENTER is not None:
+        badge_center = ((disp_w - 1) - TARGET_CENTER[0], TARGET_CENTER[1])
+        draw_target_badge(display_image, badge_center, TARGET_VISUAL_RADIUS, CURRENT_SIDE)
+
+    if target_phase == "callout" and callout_start_ts is not None:
+        draw_callout_banner(display_image, callout_text(CURRENT_TYPE, CURRENT_SIDE),
+                            PUNCH_COLORS.get(CURRENT_TYPE, WHITE),
+                            now - callout_start_ts, CALLOUT_DURATION_S)
+
+    floating_texts = draw_floating_texts(display_image, floating_texts, now)
+
+    if now < hit_vignette_until:
+        draw_hit_vignette(display_image, (hit_vignette_until - now) / HIT_VIGNETTE_S)
 
     # --- Prediction overlay: show recent model result on-screen --------
     if prediction_overlay_text and now <= prediction_overlay_until:
@@ -967,6 +1158,9 @@ while cap.isOpened():
         cv2.putText(display_image, prediction_overlay_text, (text_x, text_y),
                     overlay_font, overlay_scale, prediction_overlay_color,
                     overlay_thickness, cv2.LINE_AA)
+
+    # --- HUD: time remaining (top-left) and score (top-right) -----------
+    draw_hud(display_image, score, MAX_RUNTIME - elapsed)
 
     # --- Show frame and handle quit / runtime limit --------------------
     show_frame(WINDOW_NAME, display_image)
@@ -1101,6 +1295,12 @@ endurance_segments = {
     "final_third":  round_or_none(window_accuracy_points[2]) if len(window_accuracy_points) > 2 else None,
 }
 
+# Timing-grade totals across all punch types.
+timing_totals = {
+    grade: sum(type_counts[grade] for type_counts in target_timing.values())
+    for grade in ("perfect", "good", "miss")
+}
+
 # Session identifiers and ISO timestamp for traceability.
 fighter_id    = "fighter_sample_001"
 session_id    = f"session_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
@@ -1113,8 +1313,15 @@ session_payload = [{
     "timestamp":       timestamp_iso,
     "punches_thrown":  punches_thrown,
     "correct_punches": correct_punches_thrown,
+    "score":           score,
     "metrics": {
         "offense": {
+            "target_timing": {
+                "unit":        "count",
+                "types":       target_timing,
+                "totals":      timing_totals,
+                "description": "PERFECT / GOOD / MISS timing grades per punch type, judged against the approach ring.",
+            },
             "punch_accuracy": {
                 "unit":  "%",
                 "types": accuracy_types,
@@ -1193,6 +1400,8 @@ with open("session_metrics.json", "w", encoding="utf-8") as metric_file:
     json.dump(session_payload, metric_file, indent=2)
 
 print("Session metrics written to session_metrics.json")
+print(f"Final score: {score}  |  Timing - Perfect: {timing_totals['perfect']}, "
+      f"Good: {timing_totals['good']}, Miss: {timing_totals['miss']}")
 print(
     "Defense stats - Blocked: {blocked}, Dodged: {dodged}, Hit: {hit}".format(
         **defense_totals

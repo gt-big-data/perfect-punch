@@ -31,7 +31,8 @@ A real-time boxing analysis platform that uses computer vision to track punches,
 ### Backend
 - **FastAPI** for API endpoints
 - **WebSocket** support for real-time game updates
-- **Supabase** integration for data persistence (optional)
+- **Azure Database for PostgreSQL** for game-session persistence
+- **Supabase Auth** for user authentication
 - **MediaPipe** for pose analysis
 
 ## Getting Started
@@ -73,11 +74,36 @@ pip install -r requirements.txt
 
 3. **Start FastAPI server:**
 ```bash
-cd perfectpunch_backend
-uvicorn main:app --reload
+uvicorn perfectpunch_backend.main:app --reload
 ```
 
-The backend will be available at `http://localhost:8000`
+Run the command from the repository root. The backend will be available at
+`http://localhost:8000`.
+
+### PostgreSQL Setup
+
+Set the backend-only `DATABASE_URL` environment variable to the Azure PostgreSQL
+connection string. Keep this value out of frontend `VITE_*` variables and source
+control. The backend requires TLS when connecting.
+
+Apply the database migrations in order from the repository root, using the
+project's Python PostgreSQL driver:
+
+```powershell
+python -m perfectpunch_backend.db.apply_migrations
+```
+
+Migration 003 organizes session summaries in `game_sessions`, flattened metric
+values and descriptions in `session_metrics`, and per-punch-type metrics or game
+attempts in `punches`. Existing JSON-backed sessions can be moved into the
+structured columns and tables by running:
+
+```powershell
+python -m perfectpunch_backend.db.backfill_sessions
+```
+
+Supabase remains configured for authentication only. Azure resource provisioning
+and FastAPI App Service deployment are not part of this code setup.
 
 ## How to Use
 

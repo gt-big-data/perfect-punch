@@ -1,8 +1,11 @@
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, Depends
+import logging
+import psycopg
 from typing import Dict, List, Optional
 import json
 import asyncio
 import time
+from perfectpunch_backend.db.connection import DatabaseConfigurationError
 try:
     from perfectpunch_backend.game import (
         GameManager, CreateSessionRequest, SessionResponse, GameStatsResponse,
@@ -200,12 +203,12 @@ async def end_session(session_id: str):
     # Get final stats
     final_stats = game_manager.get_session_stats(session_id)
     
-    # Save session to Supabase
+    # Save session to PostgreSQL
     try:
         from perfectpunch_backend.services.game_session_service import save_game_session
         from datetime import datetime
         
-        # Format session data for Supabase
+        # Format session data for PostgreSQL
         session_data = {
             "session_id": session_id,
             "user_id": session.user_id or "anonymous",
@@ -231,10 +234,12 @@ async def end_session(session_id: str):
         }
         
         save_game_session(session_data)
-        print(f"Session {session_id} saved to Supabase")
-    except Exception as e:
-        print(f"Warning: Failed to save session to Supabase: {e}")
-        # Continue even if Supabase save fails
+    except (DatabaseConfigurationError, psycopg.Error) as error:
+        logging.exception("Failed to save game session to PostgreSQL")
+        raise HTTPException(
+            status_code=503,
+            detail="Game session could not be saved to the configured PostgreSQL database.",
+        ) from error
     
     # Notify WebSocket clients
     if final_stats:

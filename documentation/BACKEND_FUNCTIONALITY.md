@@ -8,7 +8,7 @@ The backend is a FastAPI server that manages game sessions, processes punch dete
 ### 1. **Game Session Management** (`/game/sessions/*`)
 - **Create Session**: `POST /game/sessions` - Creates a new game session
 - **Start Session**: `POST /game/sessions/{id}/start` - Starts a game session
-- **End Session**: `POST /game/sessions/{id}/end` - Ends a session and **saves to Supabase**
+- **End Session**: `POST /game/sessions/{id}/end` - Ends a session and saves to PostgreSQL
 - **Get Session**: `GET /game/sessions/{id}` - Retrieves session info
 - **Get Stats**: `GET /game/sessions/{id}/stats` - Gets current game statistics
 
@@ -23,7 +23,7 @@ The backend is a FastAPI server that manages game sessions, processes punch dete
 ### 3. **Dashboard Data** (`/session/latest`)
 - **Get Session Data**: `GET /session/latest?session_id=xxx`
 - Fetches session data from:
-  1. Supabase (if session was saved)
+  1. PostgreSQL (if session was saved)
   2. In-memory game manager (if session is active)
   3. Falls back to sample data
 - Formats data for dashboard display
@@ -33,7 +33,7 @@ The backend is a FastAPI server that manages game sessions, processes punch dete
 - Processes pose landmarks to detect punches
 
 ### 5. **Session Storage**
-- **Saves to Supabase**: When session ends, automatically saves:
+- **Saves to PostgreSQL**: When session ends, automatically saves:
   - Session metadata (score, accuracy, duration)
   - All punch attempts with details
   - Target statistics
@@ -53,20 +53,20 @@ The backend is a FastAPI server that manages game sessions, processes punch dete
    - Validates hits
    - Updates score
 6. **Frontend calls**: `POST /game/sessions/{id}/end` → Ends game
-7. **Backend saves**: Session data to Supabase
+7. **Backend saves**: Session data to PostgreSQL
 8. **Dashboard calls**: `GET /session/latest?session_id={id}` → Gets saved data
 
 ## What Happens Without Backend
 
 If backend is not running:
 - Frontend uses **demo mode**
-- Saves to **localStorage** instead of Supabase
+- Saves to **localStorage** instead of PostgreSQL
 - Still tracks score, targets, punches
 - Dashboard reads from localStorage
 
 ## Key Features
 
-✅ **Session Persistence**: Saves every game session to Supabase  
+✅ **Session Persistence**: Saves every game session to PostgreSQL
 ✅ **Real-Time Updates**: WebSocket for live game state  
 ✅ **Punch Detection**: ML model classifies punch types  
 ✅ **Score Tracking**: Tracks score, accuracy, reaction times  
@@ -79,7 +79,6 @@ If backend is not running:
 - `GET /session/latest` - Get session data for dashboard
 - `POST /game/sessions` - Create game session
 - `POST /game/sessions/{id}/start` - Start session
-- `POST /game/sessions/{id}/end` - End session (saves to Supabase)
+- `POST /game/sessions/{id}/end` - End session (saves to PostgreSQL)
 - `GET /game/sessions/{id}/stats` - Get session stats
 - `WebSocket /game/sessions/{id}/ws` - Real-time game communication
-
