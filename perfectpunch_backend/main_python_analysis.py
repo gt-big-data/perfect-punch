@@ -498,8 +498,10 @@ def _load_camera():
 
 def _load_torch_model():
     m = PerfectPunchCNN(num_classes=N_CLASSES)
+    model_path = os.path.join(os.path.dirname(__file__), "models", "best_punch_model.pt")
+    torch.load(model_path, map_location="cpu")
     m.load_state_dict(
-        torch.load("perfectpunch_backend/models/best_punch_model.pt", map_location="cpu")
+        torch.load(model_path, map_location="cpu")
     )
     m.eval()
     return m
