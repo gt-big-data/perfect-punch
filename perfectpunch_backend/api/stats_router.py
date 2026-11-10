@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from perfectpunch_backend.entra_auth import CurrentUser, get_current_user
 from perfectpunch_backend.services import game_session_service
-from perfectpunch_backend.supabase_client import StorageUnavailable
+from perfectpunch_backend.db.connection import StorageUnavailable
 
 router = APIRouter()
 

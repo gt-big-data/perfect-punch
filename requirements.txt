@@ -11,3 +11,6 @@ scikit-learn
 python-dotenv
 openai
 numpy
+python-jose[cryptography]==3.5.0
+requests>=2.32,<3
+psycopg[binary]>=3.2,<4

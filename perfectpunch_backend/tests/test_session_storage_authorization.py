@@ -1,47 +1,68 @@
-"""Verify the real storage adapter always includes the owner in its queries."""
-from types import SimpleNamespace
-
+"""Verify the PostgreSQL storage adapter always includes the owner in its queries."""
 import pytest
 
+from perfectpunch_backend.db.connection import StorageUnavailable, get_connection
 from perfectpunch_backend.services import game_session_service as storage
-from perfectpunch_backend.supabase_client import StorageUnavailable, get_supabase
 from perfectpunch_backend.config import allowed_origins
 
 
-class FakeDatabase:
+def owned_row(user_id, session_id="session-1", data=None):
+    return (
+        session_id, user_id, None, None, None, None, None, None,
+        None, None, None, None, None, None, data,
+    )
+
+
+class FakeCursor:
+    def __init__(self, db):
+        self.db = db
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def executemany(self, sql, rows):
+        self.db.calls.append((sql, rows))
+
+
+class FakeConnection:
     def __init__(self, rows=None, failure=False):
         self.rows = rows or []
-        self.calls = []
         self.failure = failure
+        self.calls = []
+        self.last_sql = ""
+        self.last_params = None
 
-    def table(self, name):
-        self.calls.append(("table", name))
+    def __enter__(self):
         return self
 
-    def select(self, value):
-        self.calls.append(("select", value))
-        return self
+    def __exit__(self, *args):
+        return False
 
-    def eq(self, key, value):
-        self.calls.append(("eq", key, value))
-        return self
-
-    def order(self, key, **kwargs):
-        self.calls.append(("order", key))
-        return self
-
-    def limit(self, count):
-        self.calls.append(("limit", count))
-        return self
-
-    def insert(self, value):
-        self.calls.append(("insert", value))
-        return self
-
-    def execute(self):
+    def execute(self, sql, params=None):
         if self.failure:
             raise RuntimeError("Test storage outage")
-        return SimpleNamespace(data=self.rows)
+        self.calls.append((sql, params))
+        self.last_sql = sql
+        self.last_params = params
+        return self
+
+    def fetchone(self):
+        if self.last_sql.lstrip().upper().startswith("INSERT"):
+            return (self.last_params[0],)
+        return self.rows[0] if self.rows else None
+
+    def fetchall(self):
+        return list(self.rows)
+
+    def cursor(self):
+        return FakeCursor(self)
+
+
+def connect(db):
+    return lambda: db
 
 
 @pytest.mark.parametrize("operation,args", [
@@ -50,20 +71,22 @@ class FakeDatabase:
     (storage.list_game_sessions, ("alice",)),
 ])
 def test_every_read_includes_user_filter(monkeypatch, operation, args):
-    db = FakeDatabase([{"session_id": "session-1", "user_id": "alice"}])
-    monkeypatch.setattr(storage, "get_supabase", lambda: db)
+    db = FakeConnection()
+    monkeypatch.setattr(storage, "get_connection", connect(db))
     operation(*args)
-    assert ("eq", "user_id", "alice") in db.calls
+    assert db.calls
+    assert all("user_id = %s" in sql and "alice" in params for sql, params in db.calls)
     if operation is storage.get_game_session:
-        assert ("eq", "session_id", "session-1") in db.calls
+        assert any("session-1" in params for _sql, params in db.calls)
 
 
 def test_insert_overrides_untrusted_identity(monkeypatch):
-    db = FakeDatabase()
-    monkeypatch.setattr(storage, "get_supabase", lambda: db)
+    db = FakeConnection()
+    monkeypatch.setattr(storage, "get_connection", connect(db))
     storage.save_game_session({"session_id": "session-1", "user_id": "bob"}, "alice")
-    inserted = next(call[1] for call in db.calls if call[0] == "insert")
-    assert inserted["user_id"] == "alice"
+    insert = next(params for sql, params in db.calls if sql.lstrip().upper().startswith("INSERT INTO GAME_SESSIONS"))
+    assert insert[0] == "session-1"
+    assert insert[1] == "alice"
 
 
 @pytest.mark.parametrize("operation,args", [
@@ -71,15 +94,20 @@ def test_insert_overrides_untrusted_identity(monkeypatch):
     (storage.get_latest_session, ("alice",)),
 ])
 def test_unexpected_foreign_record_is_not_returned(monkeypatch, operation, args):
-    db = FakeDatabase([{"session_id": "session-1", "user_id": "bob"}])
-    monkeypatch.setattr(storage, "get_supabase", lambda: db)
+    db = FakeConnection([owned_row("bob")])
+    monkeypatch.setattr(storage, "get_connection", connect(db))
     assert operation(*args) is None
 
 
 def test_list_rechecks_owner_on_returned_rows(monkeypatch):
-    db = FakeDatabase([{"user_id": "bob"}, {"user_id": "alice"}, {}])
-    monkeypatch.setattr(storage, "get_supabase", lambda: db)
-    assert storage.list_game_sessions("alice") == [{"user_id": "alice"}]
+    db = FakeConnection([
+        owned_row("bob"),
+        owned_row("alice", data={"summary": {"score": 1}, "user_id": "alice"}),
+        owned_row(""),
+    ])
+    monkeypatch.setattr(storage, "get_connection", connect(db))
+    rows = storage.list_game_sessions("alice")
+    assert [row["user_id"] for row in rows] == ["alice"]
 
 
 @pytest.mark.parametrize("operation,args", [
@@ -91,7 +119,7 @@ def test_list_rechecks_owner_on_returned_rows(monkeypatch):
 def test_owner_is_mandatory_before_any_database_call(monkeypatch, operation, args):
     def unexpected():
         pytest.fail("Database was called without a verified identity")
-    monkeypatch.setattr(storage, "get_supabase", unexpected)
+    monkeypatch.setattr(storage, "get_connection", unexpected)
     with pytest.raises(ValueError):
         operation(*args)
 
@@ -103,18 +131,15 @@ def test_owner_is_mandatory_before_any_database_call(monkeypatch, operation, arg
     (storage.save_game_session, ({"session_id": "session-1"}, "alice")),
 ])
 def test_storage_failure_is_explicit_not_an_empty_success(monkeypatch, operation, args):
-    monkeypatch.setattr(storage, "get_supabase", lambda: FakeDatabase(failure=True))
+    monkeypatch.setattr(storage, "get_connection", connect(FakeConnection(failure=True)))
     with pytest.raises(StorageUnavailable):
         operation(*args)
 
 
 def test_missing_storage_settings_do_not_require_the_database_package(monkeypatch):
-    get_supabase.cache_clear()
-    monkeypatch.delenv("SUPABASE_URL", raising=False)
-    monkeypatch.delenv("SUPABASE_KEY", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
     with pytest.raises(StorageUnavailable):
-        get_supabase()
-    get_supabase.cache_clear()
+        get_connection()
 
 
 @pytest.mark.parametrize("value", ["*", "", "https://app.example/path", "https://user:pass@app.example", "https://*.example"])

@@ -1,6 +1,4 @@
 """Hosted API entry point: uvicorn perfectpunch_backend.main:app."""
-from dataclasses import asdict
-from datetime import datetime, timezone
 import os
 
 from dotenv import load_dotenv
@@ -15,8 +13,8 @@ from perfectpunch_backend.config import allowed_origins
 from perfectpunch_backend.entra_auth import CurrentUser, get_current_user
 from perfectpunch_backend.api.routers import game
 from perfectpunch_backend.api.stats_router import router as stats_router
+from perfectpunch_backend.db.connection import StorageUnavailable
 from perfectpunch_backend.services import game_session_service
-from perfectpunch_backend.supabase_client import StorageUnavailable
 
 
 class FeedbackRequest(BaseModel):
@@ -35,13 +33,7 @@ def owned_dashboard_session(user_id: str, session_id: str | None = None):
             sessions = [s for s in manager.active_sessions.values() if s.user_id == user_id]
             session = max(sessions, key=lambda s: s.start_time) if sessions else None
         if session:
-            return {
-                "session_id": session.id,
-                "user_id": session.user_id,
-                "timestamp": datetime.fromtimestamp(session.start_time, timezone.utc).isoformat(),
-                "summary": manager.get_session_stats(session.id),
-                "punches": [asdict(attempt) for attempt in session.punch_attempts],
-            }
+            return game_session_service.live_session_document(session)
 
     try:
         if session_id:

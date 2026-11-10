@@ -8,8 +8,8 @@ from perfectpunch_backend.game import (
     ProcessPunchRequest, SpawnTargetRequest,
 )
 from perfectpunch_backend.entra_auth import CurrentUser, get_current_user
+from perfectpunch_backend.db.connection import StorageUnavailable
 from perfectpunch_backend.services import game_session_service
-from perfectpunch_backend.supabase_client import StorageUnavailable
 from types import SimpleNamespace
 from perfectpunch_backend.websocket_auth import authenticate_game_socket, MAX_GAME_BYTES
 
@@ -202,34 +202,10 @@ async def end_session(session_id: str, user: CurrentUser = Depends(get_current_u
     # The persistence adapter also requires the verified user ID.
     persisted = False
     try:
-        from datetime import datetime
-        
-        # Format session data for Supabase
-        session_data = {
-            "session_id": session_id,
-            "user_id": user.id,
-            "start_time": datetime.fromtimestamp(session.start_time).isoformat(),
-            "end_time": datetime.fromtimestamp(session.end_time or time.time()).isoformat() if session.end_time else None,
-            "duration_seconds": session.duration_seconds,
-            "score": session.score,
-            "accuracy": session.accuracy,
-            "total_punches": len(session.punch_attempts),
-            "targets_hit": session.total_targets_hit,
-            "targets_spawned": session.total_targets_spawned,
-            "punch_attempts": [
-                {
-                    "timestamp": attempt.timestamp,
-                    "predicted_punch": attempt.predicted_punch,
-                    "confidence": attempt.confidence,
-                    "was_correct": attempt.was_correct,
-                    "hit_target": attempt.hit_target,
-                    "response_time": attempt.response_time
-                }
-                for attempt in session.punch_attempts
-            ]
-        }
-        
-        game_session_service.save_game_session(session_data, user_id=user.id)
+        game_session_service.save_game_session(
+            game_session_service.live_session_document(session),
+            user_id=user.id,
+        )
         persisted = True
     except StorageUnavailable:
         # The response makes a failed save explicit; keep the owned session in

@@ -11,7 +11,7 @@ from perfectpunch_backend import main
 from perfectpunch_backend.api.routers import game
 from perfectpunch_backend.game.game_manager import GameManager
 from perfectpunch_backend.services import game_session_service as storage
-from perfectpunch_backend.supabase_client import StorageUnavailable
+from perfectpunch_backend.db.connection import StorageUnavailable
 from perfectpunch_backend.tests.test_entra_auth import (
     TENANT_ID, SUBDOMAIN, API_CLIENT_ID, PUBLIC_JWK, make_token,
 )

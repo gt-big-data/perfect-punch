@@ -2,27 +2,16 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from src.game.game_manager import game_manager
 from src.auth.auth import get_current_user
-from supabase import create_client
 from pydantic import BaseModel
 import os
 import json
 from dotenv import load_dotenv
 
+from perfectpunch_backend.db.connection import StorageUnavailable
+from perfectpunch_backend.services import game_session_service
+
 # Load environment variables from .env file
 load_dotenv()
-
-# ----------------------
-# Supabase Setup
-# ----------------------
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-
-if not SUPABASE_URL or not SUPABASE_KEY:
-    raise RuntimeError("❌ Supabase environment variables not set! Add them to .env")
-
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-
-SESSIONS_TABLE = "sessions"  # Make sure this exists in Supabase
 
 
 # ----------------------
@@ -129,25 +118,22 @@ async def get_game_stats(session_id: str, user = Depends(get_current_user)):
 async def end_game(session_id: str, user = Depends(get_current_user)):
     """
     End game session and return final stats.
-    ALSO saves session data to Supabase.
+    ALSO saves session data to Azure Database for PostgreSQL.
     """
     stats = game_manager.end_session(session_id)
     if not stats:
         return {"error": "Session not found"}
 
-    # ----------------------
-    # Persist to Supabase
-    # ----------------------
     try:
-        supabase.table(SESSIONS_TABLE).insert({
-            "user_id": user.id,
+        game_session_service.save_game_session({
             "session_id": session_id,
-            "session_data": stats,  # JSON stored directly
-        }).execute()
-
-        print(f"💾 Saved session {session_id} for user {user.id}")
-    except Exception as e:
-        print("❌ Failed to save session to Supabase:", e)
+            "user_id": user.id,
+            "summary": stats if isinstance(stats, dict) else {"score": 0},
+            "score": stats.get("score") if isinstance(stats, dict) else None,
+        }, user.id)
+        print(f"Saved session {session_id} for user {user.id}")
+    except (StorageUnavailable, ValueError) as e:
+        print("Failed to save session to PostgreSQL:", e)
 
     return stats
 
@@ -159,25 +145,14 @@ async def get_latest_game(user = Depends(get_current_user)):
     This is the endpoint your React Dashboard should fetch.
     """
     try:
-        response = (
-            supabase.table(SESSIONS_TABLE)
-            .select("session_data, session_id, created_at")
-            .eq("user_id", user.id)
-            .order("created_at", desc=True)
-            .limit(1)
-            .execute()
-        )
-
-        if not response.data:
-            return {"error": "No sessions found"}
-
-        latest = response.data[0]
-        return {
-            "session_id": latest["session_id"],
-            "data": latest["session_data"],
-            "timestamp": latest["created_at"],
-        }
-
-    except Exception as e:
-        print("❌ Error fetching latest session:", e)
+        latest = game_session_service.get_latest_session(user.id)
+    except (StorageUnavailable, ValueError) as e:
+        print("Error fetching latest session:", e)
         return {"error": "Could not fetch latest session"}
+    if not latest:
+        return {"error": "No sessions found"}
+    return {
+        "session_id": latest["session_id"],
+        "data": latest,
+        "timestamp": latest.get("timestamp"),
+    }
