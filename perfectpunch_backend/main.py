@@ -1,9 +1,11 @@
 """Hosted API entry point: uvicorn perfectpunch_backend.main:app."""
 import os
+from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 # Process/App Service environment variables take precedence over the local .env.
@@ -80,6 +82,9 @@ def create_app():
     )
     app.include_router(game.router)
     app.include_router(stats_router)
+    web_dir = Path(__file__).resolve().parent / "web"
+    if web_dir.is_dir():
+        app.mount("/web", StaticFiles(directory=web_dir, html=True), name="analysis-web")
 
     @app.get("/")
     def root():
