@@ -7,11 +7,11 @@ import {
   PieChart,
   Pie,
   Cell,
+  LabelList,
   XAxis,
   YAxis,
   CartesianGrid,
   Tooltip,
-  Legend,
   ResponsiveContainer,
 } from "recharts";
 
@@ -176,8 +176,7 @@ const DashboardPage = ({ onNavigate, sessionId = null, metricsData = null }) => 
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          background:
-            "linear-gradient(135deg, #0a0a0f 0%, #1a1a2e 25%, #16213e 50%, #1a1a2e 75%, #0a0a0f 100%)",
+          background: "#000000",
         }}
       >
         <div style={{ fontSize: "1.5rem", color: "#b0b0b8" }}>
@@ -198,11 +197,10 @@ const DashboardPage = ({ onNavigate, sessionId = null, metricsData = null }) => 
           justifyContent: "center",
           flexDirection: "column",
           gap: "24px",
-          background:
-            "linear-gradient(135deg, #0a0a0f 0%, #1a1a2e 25%, #16213e 50%, #1a1a2e 75%, #0a0a0f 100%)",
+          background: "#000000",
         }}
       >
-        <div style={{ fontSize: "1.5rem", fontWeight: "700", textAlign: "center", color: "#ff6b6b" }}>
+        <div style={{ fontSize: "1.5rem", fontWeight: "700", textAlign: "center", color: "#d6392c" }}>
           ⚠️ Using static data - play a new game to see your data
         </div>
         <div style={{ fontSize: "1.125rem", textAlign: "center", maxWidth: "600px", color: "#b0b0b8" }}>
@@ -217,7 +215,7 @@ const DashboardPage = ({ onNavigate, sessionId = null, metricsData = null }) => 
         <button
           onClick={() => onNavigate("landing")}
           style={{
-            backgroundColor: "#ff6b6b",
+            backgroundColor: "#d6392c",
             color: "white",
             border: "none",
             borderRadius: "16px",
@@ -225,7 +223,7 @@ const DashboardPage = ({ onNavigate, sessionId = null, metricsData = null }) => 
             fontSize: "1rem",
             fontWeight: "700",
             cursor: "pointer",
-            boxShadow: "0 8px 24px rgba(255, 107, 107, 0.35)",
+            boxShadow: "0 8px 24px rgba(214, 57, 44, 0.45)",
           }}
         >
           Go to Landing Page
@@ -257,13 +255,34 @@ const DashboardPage = ({ onNavigate, sessionId = null, metricsData = null }) => 
   ];
 
   const defense = sessionData.defense || { blocked: 0, dodged: 0, hit: 0 };
+
+  // One red ramp, light -> dark, shared by every chart: the lightest tone is
+  // always the best outcome (Jab / Dodged) and the darkest the worst (Hit).
+  const RED_LIGHT = "#ef8c7a";
+  const RED_MID = "#df4b42";
+  const RED_DARK = "#7e2026";
+  const PUNCH_COLORS = [RED_LIGHT, RED_MID, RED_DARK];
+  const VELOCITY_COLOR = "#f2695c";
+  const ACCURACY_COLOR = "#e5c14c";
+
   const defenseData = [
-    { name: "Blocked", value: defense.blocked || 0 },
-    { name: "Dodged", value: defense.dodged || 0 },
-    { name: "Hit", value: defense.hit || 0 },
+    { name: "Dodged", value: defense.dodged || 0, color: RED_LIGHT },
+    { name: "Blocked", value: defense.blocked || 0, color: RED_MID },
+    { name: "Hit", value: defense.hit || 0, color: RED_DARK },
   ];
 
-  const COLORS = ["#ff6b6b", "#ff8787", "#ff5252", "#ff8a80"];
+  const PUNCH_LEGEND = punchAccuracyData.map((d, idx) => ({
+    name: d.name,
+    color: PUNCH_COLORS[idx % PUNCH_COLORS.length],
+  }));
+
+  // Shared dark tooltip so the hover layer stops flashing white on black.
+  const tooltipStyle = {
+    background: "#1c1c1c",
+    border: "1px solid #3a3a3a",
+    borderRadius: "10px",
+    color: "#f5f5f5",
+  };
 
   const totalDefense =
     (defense.blocked || 0) +
@@ -284,7 +303,68 @@ const DashboardPage = ({ onNavigate, sessionId = null, metricsData = null }) => 
   // Calculate derived metrics from actual recorded data
   const avgVelocityMs = sessionData.summary?.avg_velocity ?? 0; // Already in m/s
   const totalPunches = sessionData.summary?.total_punches ?? 0;
-  const sessionScore = sessionData.summary?.score ?? 0;  // Correct punch count
+
+  // Punches landed vs. targets faced. Both numbers come from the defense
+  // split so the count and the percentage beside it can never disagree; the
+  // summary's critical_prevention is only a fallback when that split is empty.
+  const punchesLanded = defense.hit || 0;
+  const targetsFaced = totalDefense;
+  const targetHitRate =
+    targetsFaced > 0
+      ? Math.round((punchesLanded / targetsFaced) * 100)
+      : Math.round(sessionData.summary?.critical_prevention ?? 0);
+
+  // Shared medal look, reused by every medaled metric.
+  const BRONZE = { name: "Bronze", icon: "\u{1F949}", color: "#cd7f32" };
+  const SILVER = { name: "Silver", icon: "\u{1F948}", color: "#c3cad1" };
+  const GOLD = { name: "Gold", icon: "\u{1F947}", color: "#e3b341" };
+
+  // Target hit rate: <=50% bronze, 51-75% silver, 76-100% gold.
+  const MEDAL_TIERS = [
+    { max: 50, ...BRONZE },
+    { max: 75, ...SILVER },
+    { max: Infinity, ...GOLD },
+  ];
+  const medal = MEDAL_TIERS.find((t) => targetHitRate <= t.max);
+
+  // Avg punch speed (hand velocity). Boxing biomechanics benchmarks:
+  // recreational boxers land around 6-8 m/s, competitive amateurs 7.5-9.5 m/s
+  // (amateur mean ~9.1 m/s), elite/professional boxers 8.5-11+ m/s.
+  const SPEED_TIERS = [
+    { max: 7.5, ...BRONZE, note: "below the 7.5-9.5 m/s amateur range" },
+    { max: 9.2, ...SILVER, note: "in the 7.5-9.5 m/s amateur range" },
+    { max: Infinity, ...GOLD, note: "elite range (9.2+ m/s)" },
+  ];
+  const speedMedal =
+    avgVelocityMs > 0 ? SPEED_TIERS.find((t) => avgVelocityMs < t.max) : null;
+
+  // Avg reaction time, lower is better. Amateur competitors typically sit at
+  // 300-400 ms, pro boxers average ~200 ms, elite fighters go under 150 ms.
+  const avgReactionMs = sessionData.summary?.avg_reaction_time ?? 0;
+  const REACTION_TIERS = [
+    { max: 200, ...GOLD, note: "pro/elite range (under 200 ms)" },
+    { max: 300, ...SILVER, note: "above average (200-300 ms)" },
+    { max: Infinity, ...BRONZE, note: "amateur range (300 ms+)" },
+  ];
+  const reactionMedal =
+    avgReactionMs > 0 ? REACTION_TIERS.find((t) => avgReactionMs < t.max) : null;
+
+  // Percentage metrics are graded by color instead of a medal:
+  // 0-50 red, 50-75 yellow, 75-100 green.
+  const GRADE_RED = "#d6392c";
+  const GRADE_YELLOW = "#e3b341";
+  const GRADE_GREEN = "#3fb950";
+  const PERCENT_COLORS = [
+    { max: 50, color: GRADE_RED },
+    { max: 75, color: GRADE_YELLOW },
+    { max: Infinity, color: GRADE_GREEN },
+  ];
+  const percentColor = (pct) => PERCENT_COLORS.find((t) => pct < t.max).color;
+
+  const accuracyPct = sessionData.summary?.accuracy ?? 0;
+  const criticalPreventionPct = sessionData.summary?.critical_prevention ?? 0;
+  const accuracyColor = percentColor(accuracyPct);
+  const criticalPreventionColor = percentColor(criticalPreventionPct);
 
   // Format session date/time for display
   const formatSessionDate = (timestamp) => {
@@ -327,6 +407,212 @@ const DashboardPage = ({ onNavigate, sessionId = null, metricsData = null }) => 
   }).sort((a, b) => a.timeValue - b.timeValue);
 
   // ---------------------------------------------------------
+  // 📐 CHART AXES, LEGEND STATS AND SHARED CARD CHROME
+  // ---------------------------------------------------------
+  const sessionNumber =
+    sessionData.session_number ?? sessionData.summary?.session_number ?? null;
+  const sessionLabel =
+    sessionNumber != null ? `Session ${sessionNumber}` : "This session";
+
+  // Defense panel: the headline is everything that was *not* a clean hit.
+  const defendedCount = (defense.dodged || 0) + (defense.blocked || 0);
+  const pctOfDefense = (v) =>
+    totalDefense > 0 ? Math.round((v / totalDefense) * 100) : 0;
+  const defendedPct = pctOfDefense(defendedCount);
+  // Graded on the same percentage scale as the summary cards up top.
+  const defendedColor = percentColor(defendedPct);
+  const defenseInsight =
+    totalDefense === 0
+      ? "No defensive exchanges recorded this session."
+      : (defense.hit || 0) > defendedCount
+      ? "More punches landed than you stopped - keep your guard up between combos."
+      : (defense.dodged || 0) >= (defense.blocked || 0)
+      ? "Dodging is your strongest defense - keep the head movement going."
+      : "You block more than you dodge - adding head movement will save energy.";
+
+  const avgAccuracyPct =
+    punchAccuracyData.reduce((sum, d) => sum + d.value, 0) /
+    (punchAccuracyData.length || 1);
+  const avgReactionBar =
+    reactionTimeData.reduce((sum, d) => sum + d.time, 0) /
+    (reactionTimeData.length || 1);
+
+  // Headline stats are graded so the number itself tells you how the session
+  // went. Accuracy uses the red/yellow/green percentage scale directly;
+  // reaction time keeps its medal thresholds but is shown on that same scale,
+  // with gold reading green, silver yellow and bronze red.
+  const MEDAL_GRADE_COLORS = {
+    Gold: GRADE_GREEN,
+    Silver: GRADE_YELLOW,
+    Bronze: GRADE_RED,
+  };
+  const avgAccuracyColor = percentColor(avgAccuracyPct);
+  const avgReactionColor =
+    MEDAL_GRADE_COLORS[REACTION_TIERS.find((t) => avgReactionBar < t.max).name];
+
+  // Round an axis up to a readable top value with ~4 evenly spaced ticks.
+  const axisTicks = (maxValue) => {
+    const padded = Math.max(maxValue * 1.08, 1);
+    const magnitude = Math.pow(10, Math.floor(Math.log10(padded / 4)));
+    const normalized = padded / 4 / magnitude;
+    const step =
+      (normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 5 ? 5 : 10) *
+      magnitude;
+    const top = Math.ceil(padded / step) * step;
+    const ticks = [];
+    for (let v = 0; v <= top + step / 2; v += step) ticks.push(Math.round(v));
+    return { top, ticks };
+  };
+  const reactionAxis = axisTicks(
+    Math.max(...reactionTimeData.map((d) => d.time), 1)
+  );
+
+  // Performance timeline: both axes get their own padded, rounded range so the
+  // two lines stay readable instead of hugging the top or bottom of the plot.
+  const velocityValues = performanceTimeline.map((p) => p.velocity);
+  const accuracyValues = performanceTimeline.map((p) => p.accuracy);
+  const velocityDomain = [
+    Math.max(0, Math.floor(Math.min(...velocityValues) - 0.5)),
+    Math.ceil(Math.max(...velocityValues) + 0.5),
+  ];
+  const accuracyDomain = [
+    Math.max(0, Math.floor((Math.min(...accuracyValues) - 5) / 10) * 10),
+    Math.min(100, Math.ceil((Math.max(...accuracyValues) + 5) / 10) * 10),
+  ];
+
+  // Both timeline axes get whole-number ticks so the two scales stay legible
+  // side by side instead of landing on quarters.
+  const rangeTicks = ([min, max], minStep) => {
+    const step = Math.max(minStep, Math.ceil((max - min) / 4 / minStep) * minStep);
+    const ticks = [];
+    for (let v = min; v <= max + step / 2; v += step) ticks.push(Math.round(v));
+    return ticks;
+  };
+  const velocityTicks = rangeTicks(velocityDomain, 1);
+  const accuracyTicks = rangeTicks(accuracyDomain, 10);
+  velocityDomain[1] = Math.max(velocityDomain[1], velocityTicks[velocityTicks.length - 1]);
+  accuracyDomain[1] = Math.max(accuracyDomain[1], accuracyTicks[accuracyTicks.length - 1]);
+
+  const avgTimelineVelocity =
+    velocityValues.reduce((sum, v) => sum + v, 0) / (velocityValues.length || 1);
+  const avgTimelineAccuracy =
+    accuracyValues.reduce((sum, v) => sum + v, 0) / (accuracyValues.length || 1);
+
+  const cardStyle = {
+    borderRadius: "18px",
+    padding: "28px 32px 24px",
+    background: "#101010",
+    border: "1px solid #262626",
+  };
+  const titleStyle = {
+    fontSize: "1.3rem",
+    fontWeight: "700",
+    color: "#f2f2f2",
+    margin: 0,
+  };
+  const eyebrowStyle = {
+    fontSize: "0.72rem",
+    letterSpacing: "0.18em",
+    color: "#8a8a8a",
+    fontWeight: "600",
+  };
+  const dividerStyle = { height: "1px", background: "#262626" };
+
+  // Title on the left, a headline stat (or a custom node) on the right.
+  const ChartHeader = ({ title, statLabel, statValue, statUnit, statColor, right }) => (
+    <>
+      <div
+        style={{
+          display: "flex",
+          alignItems: right ? "center" : "flex-end",
+          justifyContent: "space-between",
+          gap: "24px",
+          flexWrap: "wrap",
+        }}
+      >
+        <h2 style={titleStyle}>{title}</h2>
+        {right || (
+          <div style={{ textAlign: "right" }}>
+            <div style={eyebrowStyle}>{statLabel}</div>
+            <div
+              style={{
+                fontSize: "2rem",
+                fontWeight: "800",
+                lineHeight: "1.1",
+                color: statColor || "#ffffff",
+              }}
+            >
+              {statValue}
+              <span style={{ color: statColor || RED_MID }}>{statUnit}</span>
+            </div>
+          </div>
+        )}
+      </div>
+      <div style={{ ...dividerStyle, margin: "18px 0 4px" }} />
+    </>
+  );
+
+  const ChartFooter = ({ items, note }) => (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: "16px",
+        flexWrap: "wrap",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: "22px", flexWrap: "wrap" }}>
+        {items.map((item) => (
+          <span
+            key={item.name}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "9px",
+              color: "#d2d2d2",
+              fontSize: "0.95rem",
+            }}
+          >
+            <span
+              style={{
+                width: "11px",
+                height: "11px",
+                borderRadius: "3px",
+                background: item.color,
+              }}
+            />
+            {item.name}
+          </span>
+        ))}
+      </div>
+      {note && <span style={{ color: "#8a8a8a", fontSize: "0.9rem" }}>{note}</span>}
+    </div>
+  );
+
+  // Percentages sit inside their own pie slice rather than on leader lines.
+  const renderPieLabel = ({ cx, cy, midAngle, innerRadius, outerRadius, percent }) => {
+    if (!percent) return null;
+    const radian = Math.PI / 180;
+    const radius = innerRadius + (outerRadius - innerRadius) * 0.62;
+    const x = cx + radius * Math.cos(-midAngle * radian);
+    const y = cy + radius * Math.sin(-midAngle * radian);
+    return (
+      <text
+        x={x}
+        y={y}
+        fill="#ffffff"
+        fontSize={17}
+        fontWeight={700}
+        textAnchor="middle"
+        dominantBaseline="central"
+      >
+        {`${Math.round(percent * 100)}%`}
+      </text>
+    );
+  };
+
+  // ---------------------------------------------------------
   // 🖥️ DASHBOARD UI
   // ---------------------------------------------------------
   return (
@@ -341,21 +627,9 @@ const DashboardPage = ({ onNavigate, sessionId = null, metricsData = null }) => 
         gap: "32px",
         position: "relative",
         overflow: "hidden",
-        background:
-          "linear-gradient(135deg, #0a0a0f 0%, #1a1a2e 25%, #16213e 50%, #1a1a2e 75%, #0a0a0f 100%)",
+        background: "#000000",
       }}
     >
-      {/* Background */}
-      <div
-        style={{
-          position: "absolute",
-          inset: 0,
-          background:
-            "radial-gradient(circle at 20% 50%, rgba(255, 107, 107, 0.1) 0%, transparent 50%), radial-gradient(circle at 80% 80%, rgba(107, 142, 255, 0.08) 0%, transparent 50%)",
-          pointerEvents: "none",
-        }}
-      />
-
       {/* Navigation */}
       <nav style={{ width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', position: 'relative', zIndex: 10 }}>
         <div style={{ color: "#b0b0b8" }}>
@@ -363,14 +637,14 @@ const DashboardPage = ({ onNavigate, sessionId = null, metricsData = null }) => 
             {formatSessionDate(sessionData.timestamp)}
           </div>
           <div style={{ fontSize: "0.75rem", color: "#9ca3af", marginTop: "2px" }}>
-            Score: {sessionScore} | {totalPunches} punches
+            {medal.icon} {medal.name} | {totalPunches} punches
           </div>
         </div>
 
         <button
           onClick={() => onNavigate("landing")}
           style={{
-            backgroundColor: "#ff6b6b",
+            backgroundColor: "#d6392c",
             color: "white",
             border: "none",
             borderRadius: "16px",
@@ -378,7 +652,7 @@ const DashboardPage = ({ onNavigate, sessionId = null, metricsData = null }) => 
             fontSize: "1rem",
             fontWeight: "700",
             cursor: "pointer",
-            boxShadow: "0 8px 24px rgba(255, 107, 107, 0.35)",
+            boxShadow: "0 8px 24px rgba(214, 57, 44, 0.45)",
           }}
         >
           ← Back to Landing
@@ -387,20 +661,32 @@ const DashboardPage = ({ onNavigate, sessionId = null, metricsData = null }) => 
 
       {/* Title */}
       <div style={{ textAlign: 'center', position: 'relative', zIndex: 10, width: '100%' }}>
-        <h1
+        <div
           style={{
-            fontSize: '3.75rem', // 6xl
-            fontWeight: '800',
-            filter: 'drop-shadow(0 4px 6px rgba(0,0,0,0.1))',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '20px',
             marginBottom: '8px',
-            background:
-              "linear-gradient(135deg, #ff6b6b 0%, #ff8787 50%, #ff6b6b 100%)",
-            WebkitBackgroundClip: "text",
-            WebkitTextFillColor: "transparent",
+            flexWrap: 'nowrap',
           }}
         >
-          🥊 PERFECTPUNCH DASHBOARD
-        </h1>
+          <img
+            src="/perfect-punch-logo.png"
+            alt="PerfectPunch logo"
+            style={{ height: 'clamp(3rem, 7vw, 5.5rem)', width: 'auto', flexShrink: 0 }}
+          />
+          <h1
+            style={{
+              fontSize: 'clamp(1.75rem, 4.6vw, 3.75rem)',
+              fontWeight: '800',
+              color: "#ffffff",
+              letterSpacing: '-0.01em',
+            }}
+          >
+            PERFECTPUNCH DASHBOARD
+          </h1>
+        </div>
         <p style={{ fontSize: '1.25rem', color: "#b0b0b8" }}>
           Today's Training Session
         </p>
@@ -416,19 +702,35 @@ const DashboardPage = ({ onNavigate, sessionId = null, metricsData = null }) => 
           style={{
             borderRadius: '16px',
             padding: '24px',
-            background: "rgba(255, 255, 255, 0.05)",
-            border: "1px solid rgba(255, 255, 255, 0.1)",
+            background: "#121212",
+            border: "1px solid #333333",
             boxShadow: "0 8px 24px rgba(0, 0, 0, 0.3)",
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '8px' }}>
-            <div style={{ width: '12px', height: '12px', borderRadius: '9999px', backgroundColor: "#ff6b6b" }}></div>
+            <div style={{ width: '12px', height: '12px', borderRadius: '9999px', backgroundColor: medal.color }}></div>
             <h2 style={{ fontSize: '0.875rem', fontWeight: '600', color: "#b0b0b8" }}>
               Score
             </h2>
           </div>
-          <p style={{ fontSize: '1.875rem', fontWeight: '800', color: "#ff6b6b" }}>
-            {sessionData.summary?.score ?? 0}
+          <p
+            style={{
+              fontSize: '1.875rem',
+              fontWeight: '800',
+              color: medal.color,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '10px',
+            }}
+          >
+            <span aria-hidden="true">{medal.icon}</span>
+            {medal.name}
+          </p>
+          <p style={{ fontSize: '0.8125rem', marginTop: '4px', color: "#9ca3af" }}>
+            {targetsFaced > 0
+              ? `${punchesLanded} punches landed of ${targetsFaced} targets (${targetHitRate}%)`
+              : `${targetHitRate}% of targets hit`}
           </p>
         </div>
 
@@ -437,20 +739,42 @@ const DashboardPage = ({ onNavigate, sessionId = null, metricsData = null }) => 
           style={{
             borderRadius: '16px',
             padding: '24px',
-            background: "rgba(255, 255, 255, 0.05)",
-            border: "1px solid rgba(255, 255, 255, 0.1)",
+            background: "#121212",
+            border: "1px solid #333333",
             boxShadow: "0 8px 24px rgba(0, 0, 0, 0.3)",
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '8px' }}>
-            <div style={{ width: '12px', height: '12px', borderRadius: '9999px', backgroundColor: "#ff6b6b" }}></div>
+            <div style={{ width: '12px', height: '12px', borderRadius: '9999px', backgroundColor: speedMedal ? speedMedal.color : "#d6392c" }}></div>
             <h2 style={{ fontSize: '0.875rem', fontWeight: '600', color: "#b0b0b8" }}>
               Avg Punch Speed
             </h2>
           </div>
-          <p style={{ fontSize: '1.875rem', fontWeight: '800', color: "#ff6b6b" }}>
-            {avgVelocityMs.toFixed(1)} m/s
-          </p>
+          {speedMedal ? (
+            <>
+              <p
+                style={{
+                  fontSize: '1.875rem',
+                  fontWeight: '800',
+                  color: speedMedal.color,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '10px',
+                }}
+              >
+                <span aria-hidden="true">{speedMedal.icon}</span>
+                {speedMedal.name}
+              </p>
+              <p style={{ fontSize: '0.8125rem', marginTop: '4px', color: "#9ca3af" }}>
+                {avgVelocityMs.toFixed(1)} m/s - {speedMedal.note}
+              </p>
+            </>
+          ) : (
+            <p style={{ fontSize: '1.875rem', fontWeight: '800', color: "#d6392c" }}>
+              {avgVelocityMs.toFixed(1)} m/s
+            </p>
+          )}
         </div>
 
         {/* Reaction Time */}
@@ -458,20 +782,42 @@ const DashboardPage = ({ onNavigate, sessionId = null, metricsData = null }) => 
           style={{
             borderRadius: '16px',
             padding: '24px',
-            background: "rgba(255, 255, 255, 0.05)",
-            border: "1px solid rgba(255, 255, 255, 0.1)",
+            background: "#121212",
+            border: "1px solid #333333",
             boxShadow: "0 8px 24px rgba(0, 0, 0, 0.3)",
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '8px' }}>
-            <div style={{ width: '12px', height: '12px', borderRadius: '9999px', backgroundColor: "#ff6b6b" }}></div>
+            <div style={{ width: '12px', height: '12px', borderRadius: '9999px', backgroundColor: reactionMedal ? reactionMedal.color : "#d6392c" }}></div>
             <h2 style={{ fontSize: '0.875rem', fontWeight: '600', color: "#b0b0b8" }}>
               Reaction Time
             </h2>
           </div>
-          <p style={{ fontSize: '1.875rem', fontWeight: '800', color: "#ff6b6b" }}>
-            {sessionData.summary?.avg_reaction_time ?? 0} ms
-          </p>
+          {reactionMedal ? (
+            <>
+              <p
+                style={{
+                  fontSize: '1.875rem',
+                  fontWeight: '800',
+                  color: reactionMedal.color,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '10px',
+                }}
+              >
+                <span aria-hidden="true">{reactionMedal.icon}</span>
+                {reactionMedal.name}
+              </p>
+              <p style={{ fontSize: '0.8125rem', marginTop: '4px', color: "#9ca3af" }}>
+                {avgReactionMs} ms - {reactionMedal.note}
+              </p>
+            </>
+          ) : (
+            <p style={{ fontSize: '1.875rem', fontWeight: '800', color: "#d6392c" }}>
+              {avgReactionMs} ms
+            </p>
+          )}
         </div>
 
         {/* Accuracy */}
@@ -479,19 +825,19 @@ const DashboardPage = ({ onNavigate, sessionId = null, metricsData = null }) => 
           style={{
             borderRadius: '16px',
             padding: '24px',
-            background: "rgba(255, 255, 255, 0.05)",
-            border: "1px solid rgba(255, 255, 255, 0.1)",
+            background: "#121212",
+            border: "1px solid #333333",
             boxShadow: "0 8px 24px rgba(0, 0, 0, 0.3)",
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '8px' }}>
-            <div style={{ width: '12px', height: '12px', borderRadius: '9999px', backgroundColor: "#ff6b6b" }}></div>
+            <div style={{ width: '12px', height: '12px', borderRadius: '9999px', backgroundColor: accuracyColor }}></div>
             <h2 style={{ fontSize: '0.875rem', fontWeight: '600', color: "#b0b0b8" }}>
               Accuracy
             </h2>
           </div>
-          <p style={{ fontSize: '1.875rem', fontWeight: '800', color: "#ff6b6b" }}>
-            {(sessionData.summary?.accuracy ?? 0).toFixed(1)}%
+          <p style={{ fontSize: '1.875rem', fontWeight: '800', color: accuracyColor }}>
+            {accuracyPct.toFixed(1)}%
           </p>
         </div>
 
@@ -500,19 +846,19 @@ const DashboardPage = ({ onNavigate, sessionId = null, metricsData = null }) => 
           style={{
             borderRadius: '16px',
             padding: '24px',
-            background: "rgba(255, 255, 255, 0.05)",
-            border: "1px solid rgba(255, 255, 255, 0.1)",
+            background: "#121212",
+            border: "1px solid #333333",
             boxShadow: "0 8px 24px rgba(0, 0, 0, 0.3)",
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '8px' }}>
-            <div style={{ width: '12px', height: '12px', borderRadius: '9999px', backgroundColor: "#ff6b6b" }}></div>
+            <div style={{ width: '12px', height: '12px', borderRadius: '9999px', backgroundColor: criticalPreventionColor }}></div>
             <h2 style={{ fontSize: '0.875rem', fontWeight: '600', color: "#b0b0b8" }}>
               Critical Prevention
             </h2>
           </div>
-          <p style={{ fontSize: '1.875rem', fontWeight: '800', color: "#ff6b6b" }}>
-            {(sessionData.summary?.critical_prevention ?? 0).toFixed(1)}%
+          <p style={{ fontSize: '1.875rem', fontWeight: '800', color: criticalPreventionColor }}>
+            {criticalPreventionPct.toFixed(1)}%
           </p>
         </div>
 
@@ -521,164 +867,336 @@ const DashboardPage = ({ onNavigate, sessionId = null, metricsData = null }) => 
           style={{
             borderRadius: '16px',
             padding: '24px',
-            background: "rgba(255, 255, 255, 0.05)",
-            border: "1px solid rgba(255, 255, 255, 0.1)",
+            background: "#121212",
+            border: "1px solid #333333",
             boxShadow: "0 8px 24px rgba(0, 0, 0, 0.3)",
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '8px' }}>
-            <div style={{ width: '12px', height: '12px', borderRadius: '9999px', backgroundColor: "#ff6b6b" }}></div>
+            <div style={{ width: '12px', height: '12px', borderRadius: '9999px', backgroundColor: "#d6392c" }}></div>
             <h2 style={{ fontSize: '0.875rem', fontWeight: '600', color: "#b0b0b8" }}>
               Total Punches
             </h2>
           </div>
-          <p style={{ fontSize: '1.875rem', fontWeight: '800', color: "#ff6b6b" }}>
+          <p style={{ fontSize: '1.875rem', fontWeight: '800', color: "#d6392c" }}>
             {totalPunches}
           </p>
         </div>
       </div>
 
-      {/* CHARTS - 3 Column Layout */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(1, 1fr)', lg: { gridTemplateColumns: 'repeat(3, 1fr)' }, gap: '32px', width: '100%', position: 'relative', zIndex: 10 }}>
+      {/* CHARTS */}
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '32px',
+          width: '100%',
+          position: 'relative',
+          zIndex: 10,
+        }}
+      >
         {/* Punch Accuracy */}
-        <section
-          style={{
-            borderRadius: '16px',
-            padding: '32px',
-            background: "rgba(255, 255, 255, 0.05)",
-            border: "1px solid rgba(255, 255, 255, 0.1)",
-          }}
-        >
-          <h2 style={{ fontSize: '1.5rem', fontWeight: '700', textAlign: 'center', marginBottom: '24px' }}>
-            Punch Accuracy
-          </h2>
-          <ResponsiveContainer width="100%" height={300}>
-            <BarChart data={punchAccuracyData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#4b5563" />
-              <XAxis dataKey="name" stroke="#9ca3af" />
-              <YAxis stroke="#9ca3af" domain={[0, 100]} />
-              <Tooltip />
-              <Bar dataKey="value" fill="#ff6b6b" />
+        <section style={cardStyle}>
+          <ChartHeader
+            title="Punch accuracy"
+            statLabel="AVERAGE"
+            statValue={Math.round(avgAccuracyPct)}
+            statUnit="%"
+            statColor={avgAccuracyColor}
+          />
+          <ResponsiveContainer width="100%" height={320}>
+            <BarChart data={punchAccuracyData} margin={{ top: 28, right: 16, left: 0, bottom: 8 }}>
+              <CartesianGrid vertical={false} stroke="#232323" />
+              <XAxis
+                dataKey="name"
+                tickLine={false}
+                axisLine={{ stroke: "#2b2b2b" }}
+                tick={{ fill: "#b4b4b4", fontSize: 13 }}
+                dy={10}
+                height={40}
+              />
+              <YAxis
+                domain={[0, 100]}
+                ticks={[0, 25, 50, 75, 100]}
+                tickLine={false}
+                axisLine={false}
+                width={54}
+                tick={{ fill: "#7f7f7f", fontSize: 12 }}
+                tickFormatter={(v) => (v === 0 ? "0" : `${v}%`)}
+              />
+              <Tooltip
+                contentStyle={tooltipStyle}
+                cursor={{ fill: "rgba(255,255,255,0.05)" }}
+                formatter={(v) => [`${Math.round(v)}%`, "Accuracy"]}
+              />
+              <Bar dataKey="value" maxBarSize={130} isAnimationActive={false}>
+                {punchAccuracyData.map((_, idx) => (
+                  <Cell key={idx} fill={PUNCH_COLORS[idx % PUNCH_COLORS.length]} />
+                ))}
+                <LabelList
+                  dataKey="value"
+                  position="top"
+                  offset={12}
+                  fill="#ffffff"
+                  fontSize={14}
+                  fontWeight={700}
+                  formatter={(v) => `${Math.round(v)}%`}
+                />
+              </Bar>
             </BarChart>
           </ResponsiveContainer>
+          <ChartFooter items={PUNCH_LEGEND} note={sessionLabel} />
         </section>
 
-        {/* Reaction Times */}
-        <section
-          style={{
-            borderRadius: '16px',
-            padding: '32px',
-            background: "rgba(255, 255, 255, 0.05)",
-            border: "1px solid rgba(255, 255, 255, 0.1)",
-          }}
-        >
-          <h2 style={{ fontSize: '1.5rem', fontWeight: '700', textAlign: 'center', marginBottom: '24px' }}>
-            Reaction Times
-          </h2>
-          <ResponsiveContainer width="100%" height={300}>
-            <BarChart data={reactionTimeData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#4b5563" />
-              <XAxis dataKey="name" stroke="#9ca3af" />
-              <YAxis stroke="#9ca3af" label={{ value: 'Time (ms)', angle: -90, position: 'insideLeft' }} />
-              <Tooltip />
-              <Bar dataKey="time" fill="#ff8787" />
+        {/* Reaction Time */}
+        <section style={cardStyle}>
+          <ChartHeader
+            title="Reaction time"
+            statLabel="AVERAGE"
+            statValue={Math.round(avgReactionBar)}
+            statUnit=" ms"
+            statColor={avgReactionColor}
+          />
+          <ResponsiveContainer width="100%" height={320}>
+            <BarChart data={reactionTimeData} margin={{ top: 28, right: 16, left: 0, bottom: 8 }}>
+              <CartesianGrid vertical={false} stroke="#232323" />
+              <XAxis
+                dataKey="name"
+                tickLine={false}
+                axisLine={{ stroke: "#2b2b2b" }}
+                tick={{ fill: "#b4b4b4", fontSize: 13 }}
+                dy={10}
+                height={40}
+              />
+              <YAxis
+                domain={[0, reactionAxis.top]}
+                ticks={reactionAxis.ticks}
+                tickLine={false}
+                axisLine={false}
+                width={54}
+                tick={{ fill: "#7f7f7f", fontSize: 12 }}
+              />
+              <Tooltip
+                contentStyle={tooltipStyle}
+                cursor={{ fill: "rgba(255,255,255,0.05)" }}
+                formatter={(v) => [`${Math.round(v)} ms`, "Reaction"]}
+              />
+              <Bar dataKey="time" maxBarSize={130} isAnimationActive={false}>
+                {reactionTimeData.map((_, idx) => (
+                  <Cell key={idx} fill={PUNCH_COLORS[idx % PUNCH_COLORS.length]} />
+                ))}
+                <LabelList
+                  dataKey="time"
+                  position="top"
+                  offset={12}
+                  fill="#ffffff"
+                  fontSize={14}
+                  fontWeight={700}
+                  formatter={(v) => `${Math.round(v)} ms`}
+                />
+              </Bar>
             </BarChart>
           </ResponsiveContainer>
+          <ChartFooter items={PUNCH_LEGEND} note={`Lower is better · ${sessionLabel}`} />
         </section>
 
         {/* Defense Breakdown */}
-        <section
-          style={{
-            borderRadius: '16px',
-            padding: '32px',
-            background: "rgba(255, 255, 255, 0.05)",
-            border: "1px solid rgba(255, 255, 255, 0.1)",
-          }}
-        >
-          <h2 style={{ fontSize: '1.5rem', fontWeight: '700', textAlign: 'center', marginBottom: '24px' }}>
-            Defense Breakdown
-          </h2>
-          <ResponsiveContainer width="100%" height={300}>
-            <PieChart>
-              <Pie
-                data={defenseData}
-                outerRadius={100}
-                dataKey="value"
-                label={({ name, percent }) => `${name}: ${(percent * 100).toFixed(0)}%`}
-              >
-                {defenseData.map((_, idx) => (
-                  <Cell key={idx} fill={COLORS[idx % COLORS.length]} />
-                ))}
-              </Pie>
-              <Tooltip />
-            </PieChart>
-          </ResponsiveContainer>
-          <p style={{ fontSize: '0.75rem', textAlign: 'center', marginTop: '8px', color: "#6b7280" }}>
-            Hover over the chart for details
-          </p>
-        </section>
-      </div>
+        <section style={cardStyle}>
+          <ChartHeader
+            title="Defense breakdown"
+            right={
+              <span style={{ color: "#8a8a8a", fontSize: "1rem" }}>
+                {sessionLabel} · {totalDefense} punches
+              </span>
+            }
+          />
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))',
+              gap: '40px',
+              alignItems: 'center',
+              marginTop: '12px',
+            }}
+          >
+            <ResponsiveContainer width="100%" height={340}>
+              <PieChart>
+                <Pie
+                  data={defenseData}
+                  dataKey="value"
+                  nameKey="name"
+                  cx="50%"
+                  cy="50%"
+                  outerRadius={150}
+                  startAngle={90}
+                  endAngle={-270}
+                  labelLine={false}
+                  label={renderPieLabel}
+                  isAnimationActive={false}
+                >
+                  {defenseData.map((d) => (
+                    <Cell key={d.name} fill={d.color} stroke="#000000" strokeWidth={3} />
+                  ))}
+                </Pie>
+                <Tooltip contentStyle={tooltipStyle} />
+              </PieChart>
+            </ResponsiveContainer>
 
-      {/* PERFORMANCE OVER SESSION - Full Width */}
-      <div style={{ width: '100%', position: 'relative', zIndex: 10 }}>
-        <section
-          style={{
-            borderRadius: '16px',
-            padding: '32px',
-            background: "rgba(255, 255, 255, 0.05)",
-            border: "1px solid rgba(255, 255, 255, 0.1)",
-          }}
-        >
-          <h2 style={{ fontSize: '1.5rem', fontWeight: '700', textAlign: 'center', marginBottom: '24px' }}>
-            Performance Over Session
-          </h2>
+            <div>
+              <div style={eyebrowStyle}>DEFENDED</div>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: '18px', marginTop: '4px', flexWrap: 'wrap' }}>
+                <div style={{ fontSize: '3.6rem', fontWeight: '800', lineHeight: '1', color: defendedColor }}>
+                  {defendedPct}
+                  <span style={{ color: defendedColor }}>%</span>
+                </div>
+                <div style={{ color: "#9a9a9a", fontSize: '1rem' }}>
+                  {defendedCount} of {totalDefense} punches
+                </div>
+              </div>
+
+              <div
+                style={{
+                  height: '4px',
+                  borderRadius: '999px',
+                  background: "#3a3a3a",
+                  marginTop: '20px',
+                  overflow: 'hidden',
+                }}
+              >
+                <div style={{ width: `${defendedPct}%`, height: '100%', background: defendedColor }} />
+              </div>
+
+              <div style={{ ...dividerStyle, marginTop: '24px' }} />
+              {defenseData.map((d) => (
+                <div
+                  key={d.name}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '14px',
+                    padding: '14px 0',
+                    borderBottom: "1px solid #1f1f1f",
+                  }}
+                >
+                  <span
+                    style={{
+                      width: '11px',
+                      height: '11px',
+                      borderRadius: '3px',
+                      background: d.color,
+                      flexShrink: 0,
+                    }}
+                  />
+                  <span style={{ flex: 1, color: "#e8e8e8", fontSize: '1.05rem' }}>{d.name}</span>
+                  <span style={{ color: "#9a9a9a", fontSize: '1rem', minWidth: '40px', textAlign: 'right' }}>
+                    {d.value}
+                  </span>
+                  <span style={{ color: "#ffffff", fontSize: '1rem', fontWeight: '700', minWidth: '56px', textAlign: 'right' }}>
+                    {pctOfDefense(d.value)}%
+                  </span>
+                </div>
+              ))}
+
+              <p style={{ color: "#8a8a8a", fontSize: '0.95rem', marginTop: '20px' }}>
+                {defenseInsight}
+              </p>
+            </div>
+          </div>
+        </section>
+
+        {/* Performance Over Session */}
+        <section style={cardStyle}>
+          <ChartHeader
+            title="Performance over session"
+            right={
+              <div style={{ display: 'flex', alignItems: 'center', gap: '32px', flexWrap: 'wrap' }}>
+                {[
+                  { color: VELOCITY_COLOR, label: "AVG VELOCITY", value: `${avgTimelineVelocity.toFixed(1)} m/s` },
+                  { color: ACCURACY_COLOR, label: "AVG ACCURACY", value: `${avgTimelineAccuracy.toFixed(1)}%` },
+                ].map((stat) => (
+                  <span key={stat.label} style={{ display: 'inline-flex', alignItems: 'center', gap: '10px' }}>
+                    <span style={{ width: '26px', height: '3px', borderRadius: '999px', background: stat.color }} />
+                    <span style={eyebrowStyle}>{stat.label}</span>
+                    <span style={{ fontSize: '1.05rem', fontWeight: '700', color: "#ffffff" }}>{stat.value}</span>
+                  </span>
+                ))}
+              </div>
+            }
+          />
           <ResponsiveContainer width="100%" height={400}>
-            <LineChart data={performanceTimeline}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#4b5563" />
-              <XAxis 
-                dataKey="time" 
-                stroke="#9ca3af"
-                interval={0}
-                angle={-45}
-                textAnchor="end"
-                height={80}
+            <LineChart data={performanceTimeline} margin={{ top: 24, right: 16, left: 8, bottom: 8 }}>
+              <CartesianGrid vertical={false} stroke="#232323" />
+              <XAxis
+                dataKey="time"
+                tickLine={false}
+                axisLine={{ stroke: "#2b2b2b" }}
+                tick={{ fill: "#9a9a9a", fontSize: 13 }}
+                dy={10}
+                height={44}
               />
-              <YAxis 
-                yAxisId="left" 
-                stroke="#9ca3af" 
-                label={{ value: 'Velocity (m/s)', angle: -90, position: 'insideLeft' }} 
+              <YAxis
+                yAxisId="left"
+                domain={velocityDomain}
+                ticks={velocityTicks}
+                tickLine={false}
+                axisLine={false}
+                width={72}
+                tick={{ fill: "#8a8a8a", fontSize: 12 }}
+                label={{
+                  value: 'Velocity (m/s)',
+                  angle: -90,
+                  position: 'insideLeft',
+                  fill: VELOCITY_COLOR,
+                  fontSize: 12,
+                  style: { textAnchor: 'middle' },
+                }}
               />
-              <YAxis 
-                yAxisId="right" 
-                orientation="right" 
-                stroke="#9ca3af"
-                domain={[0, 100]}
-                label={{ value: 'Accuracy (%)', angle: 90, position: 'insideRight' }} 
+              <YAxis
+                yAxisId="right"
+                orientation="right"
+                domain={accuracyDomain}
+                ticks={accuracyTicks}
+                tickLine={false}
+                axisLine={false}
+                width={72}
+                tick={{ fill: "#8a8a8a", fontSize: 12 }}
+                label={{
+                  value: 'Accuracy (%)',
+                  angle: 90,
+                  position: 'insideRight',
+                  fill: ACCURACY_COLOR,
+                  fontSize: 12,
+                  style: { textAnchor: 'middle' },
+                }}
               />
-              <Tooltip />
-              <Legend />
+              <Tooltip contentStyle={tooltipStyle} cursor={{ stroke: "#3a3a3a" }} />
               <Line
                 yAxisId="left"
-                type="monotone"
+                type="linear"
                 dataKey="velocity"
-                stroke="#ff6b6b"
-                strokeWidth={3}
+                stroke={VELOCITY_COLOR}
+                strokeWidth={2}
                 name="Velocity (m/s)"
-                dot={{ r: 4 }}
+                isAnimationActive={false}
+                dot={{ r: 5, fill: "#101010", stroke: VELOCITY_COLOR, strokeWidth: 2 }}
+                activeDot={{ r: 6, fill: VELOCITY_COLOR, stroke: "#101010", strokeWidth: 2 }}
               />
               <Line
                 yAxisId="right"
-                type="monotone"
+                type="linear"
                 dataKey="accuracy"
-                stroke="#fbbf24"
-                strokeWidth={3}
+                stroke={ACCURACY_COLOR}
+                strokeWidth={2}
                 name="Accuracy (%)"
-                dot={{ r: 4 }}
+                isAnimationActive={false}
+                dot={{ r: 5, fill: "#101010", stroke: ACCURACY_COLOR, strokeWidth: 2 }}
+                activeDot={{ r: 6, fill: ACCURACY_COLOR, stroke: "#101010", strokeWidth: 2 }}
               />
             </LineChart>
           </ResponsiveContainer>
         </section>
       </div>
+
     </main>
   );
 };
