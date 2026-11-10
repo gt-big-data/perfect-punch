@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Perfect Punch</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #111; color: #eee; font-family: system-ui, sans-serif; }
+    main { position: relative; height: 100%; display: grid; place-items: center; }
+    canvas { max-width: 100%; max-height: 100%; }
+    /* Video is only a frame source for the canvas; kept rendered so browsers keep decoding it. */
+    video { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+    #panel { position: absolute; max-width: 28rem; margin: 1rem; padding: 1.5rem 2rem; text-align: center;
+             background: rgba(20, 20, 20, 0.88); border-radius: 12px; }
+    #panel h2 { margin-top: 0; }
+    #start { font: inherit; font-weight: 700; padding: 0.7rem 1.6rem; border: 0; border-radius: 8px;
+             background: #ffe600; color: #111; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <main>
+    <video id="video" playsinline muted></video>
+    <canvas id="canvas" width="960" height="540"></canvas>
+    <div id="panel" role="dialog" aria-live="polite">
+      <div id="status">Loading…</div>
+      <button id="start" hidden></button>
+    </div>
+  </main>
+  <script type="module" src="game.js"></script>
+</body>
+</html>
