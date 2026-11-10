@@ -4,9 +4,9 @@
 
 export const CLIP_FRAMES = 50;
 export const TARGET_FPS = 60;
-export const VEL_WINDOW = 7;
+export const VEL_WINDOW = 5;
 export const CLASS_NAMES = ["jab", "lead-hook", "rear-uppercut"];
-const VELOCITY_LM = [11, 12, 13, 14, 15, 16];
+const VELOCITY_LM = [13, 14, 15, 16];
 const L_SHOULDER = 11, R_SHOULDER = 12, L_ELBOW = 13, R_ELBOW = 14, L_WRIST = 15, R_WRIST = 16;
 const TRACK = [L_ELBOW, R_ELBOW, L_WRIST, R_WRIST];
 const SHOULDER = [L_SHOULDER, R_SHOULDER, L_SHOULDER, R_SHOULDER];
@@ -96,7 +96,7 @@ export function buildTensor(clip) {
       const v = t > 0 ? sub(p, pos(t - 1, j)) : [0, 0, 0];
       const bone = sub(p, j < 2 ? f[SHOULDER[j]] : f[TRACK[j - 2]]);
       const bl = norm(bone) + 1e-8;
-      const lat = v[0] / (Math.hypot(v[0], v[2]) + eps);
+      const lat = v[0] / (Math.hypot(v[0], v[1], v[2]) + eps);
       const vert = v[1] / (norm(v) + eps);
       const angle = j % 2 === 0 ? la : ra;
       for (let k = 0; k < 3; k++) {
