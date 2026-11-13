@@ -10,6 +10,7 @@ MIGRATIONS = (
     "001_create_game_sessions.sql",
     "002_create_punches.sql",
     "003_normalize_session_metrics.sql",
+    "004_progress_analysis_dashboard.sql",
 )
 
 

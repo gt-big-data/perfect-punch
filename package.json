@@ -16,6 +16,7 @@
     "@mediapipe/pose": "^0.5.1675469404",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
+    "react-is": "^19.3.1",
     "react-router-dom": "^7.9.5",
     "recharts": "^3.3.0"
   },
