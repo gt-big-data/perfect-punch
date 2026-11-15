@@ -155,12 +155,22 @@ export default function CameraMirror({ onNavigate, onGoToDashboard }) {
               case 'target_spawn':
                 if (data) {
                   setCurrentTarget({
+                    id: data.id,
+                    requestedHand: data.requested_hand,
+                    expiresAtMs: data.expires_at_ms,
                     x: data.center_x,
                     y: data.center_y,
                     radius: data.radius,
                     type: data.target_type,
                   });
                 }
+                break;
+              case 'target_result':
+                if (data?.target_id) {
+                  setCurrentTarget(current => current?.id === data.target_id ? null : current);
+                  if (targetRef.current?.id === data.target_id) targetRef.current = null;
+                }
+                // Authoritative stats follow separately in stats_update.
                 break;
               case 'punch_result':
                 // Detailed result logging can help debugging in dev

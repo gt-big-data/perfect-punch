@@ -297,6 +297,33 @@ async def process_punch(session_id: str, request: ProcessPunchRequest, user: Cur
         raise HTTPException(status_code=500, detail=f"Failed to process punch: {str(e)}")
 
 
+@router.get("/sessions/{session_id}/datavis-inputs")
+async def get_datavis_inputs(session_id: str,
+                             user: CurrentUser = Depends(get_current_user)):
+    """User-scoped most recent raw pose inputs and performance state."""
+    require_session_owner(session_id, user)
+    session = game_manager.get_session(session_id)
+    return {
+        "session_id": session_id,
+        "pose": session.latest_datavis_landmarks,
+        "performance": session.tracker.snapshot() if session.tracker else None,
+    }
+
+
+@router.post("/sessions/{session_id}/datavis-config")
+async def update_datavis_config(session_id: str, payload: dict,
+                                user: CurrentUser = Depends(get_current_user)):
+    """Authenticated integration point for DataVis supplied weights and regions."""
+    require_session_owner(session_id, user)
+    try:
+        game_manager.set_datavis_config(
+            session_id, payload.get("weights"), payload.get("target_regions")
+        )
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return {"status": "accepted", "session_id": session_id}
+
+
 @router.websocket("/sessions/{session_id}/ws")
 async def game_websocket(websocket: WebSocket, session_id: str):
     user = await authenticate_game_socket(websocket, session_id, game_manager.get_session)
@@ -386,6 +413,14 @@ async def handle_pose_data(websocket: WebSocket, session_id: str, pose_data: dic
         else:
             return
 
+        # Cache only the latest pose for DataVis; no raw camera frames are persisted.
+        from perfectpunch_backend.game.datavis_contract import landmark_payload
+        session = game_manager.get_session(session_id)
+        if session:
+            session.latest_datavis_landmarks = landmark_payload(
+                landmarks, frame_width, frame_height
+            )
+
         # Check for new target spawning
         current_target = game_manager.get_current_target(session_id)
         if not current_target:
@@ -401,10 +436,17 @@ async def handle_pose_data(websocket: WebSocket, session_id: str, pose_data: dic
                         "center_y": target.center[1],
                         "radius": target.radius,
                         "target_type": target.target_type.value,
-                        "spawn_time": target.spawn_time
+                        "spawn_time": target.spawn_time,
+                        "requested_punch": target.required_punch,
+                        "requested_hand": target.required_hand,
+                        "expires_at_ms": int(target.expires_at * 1000) if target.expires_at else None
                     }
                 }))
                 current_target = target
+
+        # Report timeouts even if this frame did not contain a punch.
+        for event in game_manager.drain_target_events(session_id):
+            await websocket.send_json({"type": "target_result", "data": event})
 
         # Process potential punch
         if pose_coordinates and current_target:
@@ -432,7 +474,13 @@ async def handle_pose_data(websocket: WebSocket, session_id: str, pose_data: dic
                         "type": "stats_update",
                         "data": stats
                     }))
-        
+        outcome_events = game_manager.drain_target_events(session_id)
+        for event in outcome_events:
+            await websocket.send_json({"type": "target_result", "data": event})
+        if outcome_events:
+            await websocket.send_json({"type": "stats_update", "data": game_manager.get_session_stats(session_id)})
+        # The live game can request stats; publish them after outcomes, not each frame.
+
     except Exception as e:
         print(f"Error handling pose data: {e}")
         await websocket.send_text(json.dumps({
@@ -463,6 +511,7 @@ async def game_health():
 async def startup_event():
     """Start background tasks."""
     asyncio.create_task(cleanup_expired_sessions_task())
+    asyncio.create_task(publish_target_expirations())
 
 
 async def cleanup_expired_sessions_task():
@@ -482,3 +531,24 @@ async def cleanup_expired_sessions_task():
             print(f"Error in cleanup task: {e}")
         
         await asyncio.sleep(5)  # Check every 5 seconds
+
+
+async def publish_target_expirations():
+    """Resolve timed-out targets without relying on incoming pose frames."""
+    while True:
+        await asyncio.sleep(0.25)
+        if not game_manager:
+            continue
+        for session_id in list(game_manager.active_sessions):
+            game_manager.expire_targets(session_id)
+            events = game_manager.drain_target_events(session_id)
+            for event in events:
+                await manager.send_personal_message(
+                    {"type": "target_result", "data": event}, session_id
+                )
+            if events:
+                stats = game_manager.get_session_stats(session_id)
+                if stats:
+                    await manager.send_personal_message(
+                        {"type": "stats_update", "data": stats}, session_id
+                    )
