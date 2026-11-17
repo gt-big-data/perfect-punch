@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-const LandingPage = ({ onNavigate, onBackToHome }) => {
+const LandingPage = ({ onNavigate, onBackToHome, onViewProgress = () => {} }) => {
   const { user } = useAuth();
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [error, setError] = useState(null);
@@ -93,6 +93,40 @@ const LandingPage = ({ onNavigate, onBackToHome }) => {
     e.target.style.backgroundColor = '#ff6b6b';
     e.target.style.transform = 'translateY(0) scale(1)';
     e.target.style.boxShadow = '0 8px 24px rgba(255, 107, 107, 0.35), 0 0 0 1px rgba(255, 255, 255, 0.05) inset';
+  };
+
+  // Secondary action under the main CTA: same shape as the primary button but
+  // translucent, so "Start Punch Analysis" stays the obvious first move.
+  const secondaryButtonStyle = {
+    marginTop: '20px',
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    color: '#e0e0e8',
+    border: '2px solid rgba(255, 255, 255, 0.12)',
+    borderRadius: '16px',
+    padding: '18px 40px',
+    fontSize: '1.05rem',
+    fontWeight: '700',
+    cursor: 'pointer',
+    boxShadow: '0 4px 16px rgba(0, 0, 0, 0.2)',
+    transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+    letterSpacing: '0.5px',
+    backdropFilter: 'blur(10px)',
+  };
+
+  const handleSecondaryHover = (e) => {
+    e.target.style.backgroundColor = 'rgba(255, 255, 255, 0.09)';
+    e.target.style.borderColor = 'rgba(255, 107, 107, 0.5)';
+    e.target.style.color = '#ffffff';
+    e.target.style.transform = 'translateY(-3px)';
+    e.target.style.boxShadow = '0 8px 24px rgba(0, 0, 0, 0.3)';
+  };
+
+  const handleSecondaryLeave = (e) => {
+    e.target.style.backgroundColor = 'rgba(255, 255, 255, 0.05)';
+    e.target.style.borderColor = 'rgba(255, 255, 255, 0.12)';
+    e.target.style.color = '#e0e0e8';
+    e.target.style.transform = 'translateY(0)';
+    e.target.style.boxShadow = '0 4px 16px rgba(0, 0, 0, 0.2)';
   };
 
   const backButtonStyle = {
@@ -269,6 +303,14 @@ const LandingPage = ({ onNavigate, onBackToHome }) => {
           disabled={isAnalyzing}
         >
           {isAnalyzing ? 'Analyzing... (Check Camera Window)' : 'Start Punch Analysis'}
+        </button>
+        <button
+          style={secondaryButtonStyle}
+          onClick={onViewProgress}
+          onMouseEnter={handleSecondaryHover}
+          onMouseLeave={handleSecondaryLeave}
+        >
+          View full progress analysis →
         </button>
         {error && (
           <p style={{ color: '#ff6b6b', marginTop: '20px', fontSize: '0.95rem', textAlign: 'center' }}>

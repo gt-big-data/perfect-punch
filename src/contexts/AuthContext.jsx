@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useState } from 'react'
 import { supabase } from '../config/supabase'
+import { syncLocalSessions } from '../config/sessionStore'
 
 const AuthContext = createContext({})
 
@@ -25,9 +26,17 @@ useEffect(() => {
     // Listen for changes on auth state (login/logout)
     const {
     data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
+    } = supabase.auth.onAuthStateChange((event, session) => {
     setUser(session?.user ?? null)
     setLoading(false)
+
+    // Anything trained while signed out lives only on this device. Push it
+    // up on sign-in so the account's history stays complete.
+    if (event === 'SIGNED_IN') {
+        syncLocalSessions().catch((error) =>
+        console.warn('⚠️ Could not back-fill local sessions:', error)
+        )
+    }
     })
 
     return () => subscription.unsubscribe()

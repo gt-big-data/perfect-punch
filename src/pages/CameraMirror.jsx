@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Pose } from '@mediapipe/pose';
 import { Camera } from '@mediapipe/camera_utils';
 import { useAuth } from '../contexts/AuthContext';
+import { saveSession } from '../config/sessionStore';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000';
 
@@ -660,9 +661,14 @@ export default function CameraMirror({ onNavigate, onGoToDashboard }) {
         timeline: generateTimeline()
       };
       
-      localStorage.setItem(`demo_session_${sessionId}`, JSON.stringify(demoSessionData));
-      console.log('✅ Demo session data saved to localStorage:', demoSessionData);
+      // Caches on this device and, when signed in, syncs to Supabase so the
+      // session shows up in history on the user's other devices too.
+      const result = await saveSession(demoSessionData);
+      console.log('✅ Session saved:', { ...result, sessionId });
       console.log('📊 Score saved:', finalScore, 'Targets hit:', finalGameData.targetsHit);
+      if (!result.synced) {
+        console.warn(`⚠️ Session not synced to the cloud: ${result.reason}`);
+      }
     }
     
     // Close WebSocket if open
