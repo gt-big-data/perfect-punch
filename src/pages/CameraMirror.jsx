@@ -463,9 +463,12 @@ export default function CameraMirror({ onNavigate, onGoToDashboard }) {
       const canvas = canvasRef.current;
       const ctx = canvas.getContext('2d');
       
-      // Draw video frame
+      // Draw the camera without the webcam's selfie mirror. Landmarks and
+      // targets use the same coordinate space, so they flip with the frame.
       ctx.save();
       ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.translate(canvas.width, 0);
+      ctx.scale(-1, 1);
       ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
       
       // Draw pose landmarks
@@ -532,10 +535,16 @@ export default function CameraMirror({ onNavigate, onGoToDashboard }) {
         ctx.beginPath();
         ctx.arc(activeTarget.x, activeTarget.y, activeTarget.radius, 0, 2 * Math.PI);
         ctx.fill();
-        
+      }
+
+      ctx.restore();
+
+      if (activeTarget) {
         ctx.fillStyle = '#FFFFFF';
         ctx.font = 'bold 16px Arial';
-        ctx.fillText(activeTarget.type.toUpperCase(), activeTarget.x - 20, activeTarget.y - 35);
+        ctx.textAlign = 'center';
+        ctx.fillText(activeTarget.type.toUpperCase(), canvas.width - activeTarget.x, activeTarget.y - 35);
+        ctx.textAlign = 'left';
       }
       
       ctx.fillStyle = '#FFFFFF';
@@ -549,8 +558,6 @@ export default function CameraMirror({ onNavigate, onGoToDashboard }) {
         ctx.font = '12px Arial';
         ctx.fillText('DEMO MODE', 10, canvas.height - 10);
       }
-      
-      ctx.restore();
     });
     
     const camera = new Camera(videoRef.current, {

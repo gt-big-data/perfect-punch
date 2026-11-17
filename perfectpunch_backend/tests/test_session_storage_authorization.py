@@ -80,6 +80,44 @@ def test_every_read_includes_user_filter(monkeypatch, operation, args):
         assert any("session-1" in params for _sql, params in db.calls)
 
 
+def test_punch_hits_keep_grade_reaction_time_and_defense_hits(monkeypatch):
+    db = FakeConnection()
+    monkeypatch.setattr(storage, "get_connection", connect(db))
+    storage.save_game_session({
+        "session_id": "round-1",
+        "summary": {"score": 300, "total_punches": 2},
+        "defense": {"blocked": 1, "dodged": 2, "hit": 3},
+        "punch_attempts": [
+            {
+                "predicted_punch": "jab", "was_correct": True, "hit_target": True,
+                "timing_grade": "perfect", "reaction_time_ms": 180, "response_time": 0.18,
+            },
+            {
+                "predicted_punch": "hook", "was_correct": False, "hit_target": False,
+                "timing_grade": "miss", "response_time": 0.4,
+            },
+        ],
+    }, "alice")
+    session_insert = next(
+        params for sql, params in db.calls
+        if sql.lstrip().upper().startswith("INSERT INTO GAME_SESSIONS")
+    )
+    assert session_insert[-3:] == (1, 2, 3)
+    _sql, punch_rows = next(
+        (sql, rows) for sql, rows in db.calls if "INSERT INTO punches" in sql
+    )
+    perfect, miss = punch_rows
+    assert perfect[4] == "jab"
+    assert perfect[6] == 180
+    assert perfect[8:11] == (1, 0, 0)
+    assert perfect[12] is True
+    assert perfect[13] is True
+    assert miss[6] == 400
+    assert miss[8:11] == (0, 0, 1)
+    assert miss[12] is False
+    assert miss[13] is False
+
+
 def test_insert_overrides_untrusted_identity(monkeypatch):
     db = FakeConnection()
     monkeypatch.setattr(storage, "get_connection", connect(db))

@@ -83,6 +83,7 @@ PRIVATE_REQUESTS = [
     ("POST", "/game/sessions/{id}/targets/spawn", {"session_id": "{id}", "landmarks": [], "frame_width": 640, "frame_height": 480}),
     ("POST", "/game/sessions/{id}/punch", {"session_id": "{id}", "landmarks": [], "pose_coordinates": [], "frame_width": 640, "frame_height": 480}),
     ("GET", "/session/latest", None),
+    ("POST", "/session", {"session_id": "round-1", "summary": {"score": 1}}),
     ("GET", "/stats", None),
     ("POST", "/session/feedback", {"session_id": "{id}"}),
     ("POST", "/session/upload", {}),
@@ -238,6 +239,25 @@ def test_end_reports_failed_persistence_honestly_and_retains_memory_copy(api, mo
     assert response.status_code == 200
     assert response.json()["persisted"] is False
     assert manager.get_session(own.id) is not None
+
+
+def test_completed_session_is_saved_under_the_signed_in_user(api):
+    client, *_rest, writes, _calls = api
+    response = client.post("/session", json={
+        "session_id": "round-1", "user_id": "bob", "summary": {"score": 12, "total_punches": 4},
+        "defense": {"blocked": 1, "dodged": 0, "hit": 2},
+        "punch_attempts": [{
+            "predicted_punch": "jab", "was_correct": True, "hit_target": True,
+            "timing_grade": "perfect", "reaction_time_ms": 180,
+        }],
+    }, headers=headers())
+    assert response.status_code == 200
+    assert response.json()["session_id"] == "round-1"
+    assert writes[0][1] == "alice"
+    saved = writes[0][0]
+    assert saved["user_id"] == "alice"
+    assert saved["defense"]["hit"] == 2
+    assert saved["punch_attempts"][0]["hit_target"] is True
 
 
 def test_stats_only_contains_requesting_users_rows(api):

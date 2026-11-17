@@ -367,4 +367,4 @@ class GameManager:
     
     def is_model_loaded(self) -> bool:
         """Check if the punch classification model is loaded."""
-        return self.classifier.is_loaded()
+        return self.classifier is not None and self.classifier.is_loaded()

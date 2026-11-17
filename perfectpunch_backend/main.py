@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 # Process/App Service environment variables take precedence over the local .env.
 load_dotenv()
@@ -22,6 +22,12 @@ from perfectpunch_backend.services import game_session_service
 class FeedbackRequest(BaseModel):
     # Fetch the owned session on the server, rather than trusting client metrics.
     session_id: str = Field(min_length=1, max_length=200)
+
+
+class CompletedSession(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    session_id: str = Field(min_length=1, max_length=200)
+    summary: dict
 
 
 def owned_dashboard_session(user_id: str, session_id: str | None = None):
@@ -96,6 +102,18 @@ def create_app():
         user: CurrentUser = Depends(get_current_user),
     ):
         return owned_dashboard_session(user.id, session_id)
+
+    @app.post("/session")
+    def save_completed_session(body: CompletedSession, user: CurrentUser = Depends(get_current_user)):
+        payload = body.model_dump()
+        payload["user_id"] = user.id
+        try:
+            game_session_service.save_game_session(payload, user.id)
+        except StorageUnavailable:
+            raise HTTPException(status_code=503, detail="Session storage is unavailable")
+        except ValueError:
+            raise HTTPException(status_code=422, detail="Session could not be saved")
+        return {"session_id": payload["session_id"]}
 
     @app.post("/session/feedback")
     def feedback(request: FeedbackRequest, user: CurrentUser = Depends(get_current_user)):

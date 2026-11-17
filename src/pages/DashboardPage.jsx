@@ -301,6 +301,22 @@ const DashboardPage = ({ onNavigate, sessionId = null, metricsData = null }) => 
         >
           ← Back to Landing
         </button>
+        <button
+          onClick={() => onNavigate("sessions")}
+          style={{
+            backgroundColor: "rgba(255,255,255,0.08)",
+            color: "white",
+            border: "1px solid rgba(255,255,255,0.15)",
+            borderRadius: "16px",
+            padding: "12px 24px",
+            fontSize: "1rem",
+            fontWeight: "700",
+            cursor: "pointer",
+            marginLeft: "12px",
+          }}
+        >
+          All sessions
+        </button>
       </nav>
 
       {/* Title */}

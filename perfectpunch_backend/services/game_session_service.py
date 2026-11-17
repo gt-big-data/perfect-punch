@@ -29,6 +29,12 @@ def _millis(value: Any) -> Optional[float]:
     return number * 1000 if number < 20 else number
 
 
+def _bool(value: Any) -> Optional[bool]:
+    if isinstance(value, bool):
+        return value
+    return None
+
+
 def live_session_document(session) -> dict:
     """Dashboard payload for a live game. This is what gets stored and displayed."""
     attempts = [
@@ -186,16 +192,42 @@ def _punch_rows(data: dict, user_id: str):
     attempts = data.get("punch_attempts")
     if not isinstance(attempts, list):
         return []
-    return [
-        (
+    rows = []
+    for index, attempt in enumerate(attempts):
+        if not isinstance(attempt, dict):
+            continue
+        grade = attempt.get("timing_grade")
+        grade = grade.lower() if isinstance(grade, str) else ""
+        if grade not in {"perfect", "good", "miss"}:
+            grade = ""
+        reaction_ms = _millis(attempt.get("reaction_time_ms"))
+        if reaction_ms is None:
+            reaction_ms = _millis(attempt.get("response_time"))
+        hit = _bool(attempt.get("hit_target"))
+        if hit is None and grade:
+            hit = grade in {"perfect", "good"}
+        if grade:
+            perfect, good, miss = (grade == "perfect", grade == "good", grade == "miss")
+            timing = (int(perfect), int(good), int(miss))
+        else:
+            timing = (
+                _int(attempt.get("timing_perfect")),
+                _int(attempt.get("timing_good")),
+                _int(attempt.get("timing_miss")),
+            )
+        rows.append((
             session_id, user_id, f"attempt:{index}", "attempt",
-            attempt.get("predicted_punch") or "jab", None, None,
-            _number(attempt.get("punch_velocity")), None, None, None,
-            _number(attempt.get("confidence")), attempt.get("was_correct"),
-            attempt.get("hit_target"), _number(attempt.get("response_time")),
-        )
-        for index, attempt in enumerate(attempts) if isinstance(attempt, dict)
-    ]
+            attempt.get("predicted_punch") or "jab",
+            _number(attempt.get("punch_accuracy")),
+            reaction_ms,
+            _number(attempt.get("punch_velocity", attempt.get("punch_speed"))),
+            *timing,
+            _number(attempt.get("confidence")),
+            _bool(attempt.get("was_correct")),
+            hit,
+            _number(attempt.get("response_time")),
+        ))
+    return rows
 
 
 def _is_dashboard(data: Any) -> bool:

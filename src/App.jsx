@@ -4,6 +4,7 @@ import './App.css'
 import LandingPage from './pages/LandingPage'
 import CameraMirror from './pages/CameraMirror'
 import DashboardPage from "./pages/DashboardPage"
+import SessionsPage from "./pages/SessionsPage"
 import { AuthProvider, useAuth } from './contexts/AuthContext'
 import AuthBar from './components/AuthBar'
 import AuthDebug from './dev/AuthDebug'
@@ -11,7 +12,15 @@ import AuthDebug from './dev/AuthDebug'
 // Signing in sends the browser to Microsoft and back, which reloads the app.
 // Just before leaving we note which page the player was on, so they come back to it.
 const RETURN_PAGE_KEY = 'pp.returnPage'
-const RESTORABLE_PAGES = ['home', 'landing'] // the others need in-memory game state
+const RESTORABLE_PAGES = ['home', 'landing', 'sessions'] // the others need in-memory game state
+
+const readLaunch = () => {
+  const params = new URLSearchParams(window.location.search)
+  const view = params.get('view')
+  if (view === 'dashboard') return { page: 'dashboard', session: params.get('session') }
+  if (view === 'sessions') return { page: 'sessions', session: null }
+  return null
+}
 
 const readReturnPage = () => {
   try {
@@ -40,14 +49,20 @@ const clearReturnPage = () => {
 
 function AppContent() {
   const { loading } = useAuth()
-  const [currentPage, setCurrentPage] = useState(() => readReturnPage() || 'home')
-  const [currentSessionId, setCurrentSessionId] = useState(null)
+  const launch = readLaunch()
+  const [currentPage, setCurrentPage] = useState(() => launch?.page || readReturnPage() || 'home')
+  const [currentSessionId, setCurrentSessionId] = useState(launch?.session || null)
   const [analysisMetrics, setAnalysisMetrics] = useState(null)
 
 
   // The saved page has been used (it was read when the app started), so clear it.
   useEffect(() => {
     clearReturnPage()
+    if (!launch) return
+    const url = new URL(window.location.href)
+    url.searchParams.delete('view')
+    url.searchParams.delete('session')
+    window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`)
   }, [])
 
   const rememberPageForRedirect = () => {
@@ -107,7 +122,7 @@ function AppContent() {
       )}
 
       {currentPage === 'home' && (
-        <HomePage onNavigate={openCoachingSession} />
+        <HomePage onNavigate={openCoachingSession} onOpenSessions={() => setCurrentPage('sessions')} />
       )}
 
       {currentPage === 'landing' && (
@@ -124,8 +139,12 @@ function AppContent() {
         />
       )}
 
+      {currentPage === 'sessions' && (
+        <SessionsPage onBack={backToHome} onOpen={goToDashboard} />
+      )}
+
       {currentPage === 'dashboard' && (
-        <DashboardPage onNavigate={backToLanding} sessionId={currentSessionId} metricsData={analysisMetrics} />
+        <DashboardPage onNavigate={(page) => page === 'sessions' ? setCurrentPage('sessions') : backToLanding()} sessionId={currentSessionId} metricsData={analysisMetrics} />
       )}
     </div>
   )

@@ -1,6 +1,6 @@
 import React from 'react';
 
-const HomePage = ({ onNavigate }) => {
+const HomePage = ({ onNavigate, onOpenSessions }) => {
   const containerStyle = {
     display: 'flex',
     flexDirection: 'column',
@@ -159,7 +159,6 @@ const HomePage = ({ onNavigate }) => {
               <span>Open Coaching Session</span>
             </div>
           </button>
-          
           <button
             style={secondaryButtonStyle}
             onMouseEnter={handleSecondaryButtonHover}
@@ -170,7 +169,7 @@ const HomePage = ({ onNavigate }) => {
               <span>Targeted Skill Session</span>
             </div>
           </button>
-          
+
           <button
             style={secondaryButtonStyle}
             onMouseEnter={handleSecondaryButtonHover}
@@ -179,6 +178,18 @@ const HomePage = ({ onNavigate }) => {
             <div style={buttonLabelStyle}>
               <span>📚</span>
               <span>Tutorial Mode</span>
+            </div>
+          </button>
+
+          <button
+            style={secondaryButtonStyle}
+            onClick={onOpenSessions}
+            onMouseEnter={handleSecondaryButtonHover}
+            onMouseLeave={handleSecondaryButtonLeave}
+          >
+            <div style={buttonLabelStyle}>
+              <span>📊</span>
+              <span>Your Sessions</span>
             </div>
           </button>
         </div>

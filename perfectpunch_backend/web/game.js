@@ -1,7 +1,7 @@
 // Browser port of main_python_analysis.py + defense.py + target_utils.py:
 // prompted punches (callout → osu!-style target → CNN check) and telegraphed attacks to dodge.
 import { FilesetResolver, PoseLandmarker, DrawingUtils } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
-import * as ort from "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.min.mjs";
+import * as ort from "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.wasm.min.mjs";
 import { CLASS_NAMES, CLIP_FRAMES, TARGET_FPS, normalizeSkeleton, extractLiveClip, mirrorSkeleton, buildTensor } from "./pipeline.js";
 import { PunchDetector, GUARD_READY_SAMPLES } from "./punchDetector.js";
 
@@ -52,6 +52,7 @@ const SIDE_COLORS = { L: [0, 255, 0], R: [255, 165, 0] };             // debug o
 const POSE_MODEL_URL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task";
 const MP_WASM = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm";
 ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/";
+ort.env.wasm.numThreads = 1;
 
 const video = document.getElementById("video");
 const canvas = document.getElementById("canvas");
@@ -400,7 +401,7 @@ function newRound(now) {
   st = {
     start: now, score: 0, phase: "idle", type: null, side: null, center: null, spawnTs: 0, idealTs: 0,
     calloutTs: 0, nextSpawn: 0, handInsidePrev: true, recent: [], reserved: [], texts: [], vignetteUntil: 0,
-    prediction: null, pending: null, timing: { perfect: 0, good: 0, miss: 0 },
+    prediction: null, pending: null, timing: { perfect: 0, good: 0, miss: 0 }, attempts: [],
   };
 }
 
@@ -523,19 +524,27 @@ function stepRound(lms, now, events) {
     // A punch still being thrown when the window closes gets a moment to report its (possibly in-window) peak.
     const settling = now <= windowClose + PUNCH_RESOLVE_GRACE_S && detector.trackers[st.side].state === "throwing";
     const missed = !hit && (!!punch || (now > windowClose && !settling));
-    if (hit) {
-      const gradeTs = punchHit ? punch.peakT : now;
-      const grade = Math.abs(gradeTs - st.idealTs) <= PERFECT_WINDOW_S ? "PERFECT" : "GOOD";
-      st.timing[grade.toLowerCase()] += 1;
-      st.score += grade === "PERFECT" ? SCORE_PERFECT : SCORE_GOOD;
-      st.texts.push({ text: grade, pos: st.center, color: GRADE_COLORS[grade], born: now, scale: grade === "PERFECT" ? 1.4 : 1.2 });
-      if (punch) requestPrediction(st, st.type, st.side, segmentClip(punch.startT, punch.endT) ?? snapshotClip(st.spawnTs));
-      else st.pending = { type: st.type, side: st.side, spawnTs: st.spawnTs, deadline: now + PENDING_CLASSIFY_S };
-    } else if (missed) {
-      st.timing.miss += 1;
-      st.texts.push({ text: "MISS", pos: st.center, color: GRADE_COLORS.MISS, born: now, scale: 1.1 });
-    }
     if (hit || missed) {
+      const gradeTs = punchHit ? punch.peakT : now;
+      const grade = hit && Math.abs(gradeTs - st.idealTs) <= PERFECT_WINDOW_S ? "perfect"
+        : hit ? "good" : "miss";
+      st.timing[grade] += 1;
+      if (hit) {
+        st.score += grade === "perfect" ? SCORE_PERFECT : SCORE_GOOD;
+        st.texts.push({ text: grade.toUpperCase(), pos: st.center, color: GRADE_COLORS[grade.toUpperCase()], born: now, scale: grade === "perfect" ? 1.4 : 1.2 });
+        if (punch) requestPrediction(st, st.type, st.side, segmentClip(punch.startT, punch.endT) ?? snapshotClip(st.spawnTs));
+        else st.pending = { type: st.type, side: st.side, spawnTs: st.spawnTs, deadline: now + PENDING_CLASSIFY_S };
+      } else {
+        st.texts.push({ text: "MISS", pos: st.center, color: GRADE_COLORS.MISS, born: now, scale: 1.1 });
+      }
+      st.attempts.push({
+        type: st.type,
+        correct: hit,
+        hitTarget: hit,
+        grade,
+        t: Math.max(0, now - st.start),
+        reactionMs: Math.round(Math.abs(gradeTs - st.idealTs) * 1000),
+      });
       Object.assign(st, { phase: "idle", center: null, type: null, side: null, nextSpawn: now + TARGET_RESPAWN_DELAY_S });
     }
   }
@@ -610,14 +619,91 @@ function showPanel(html, buttonText) {
   panel.hidden = false;
 }
 
-// Same as the end of the Python script: print the totals, release the camera, close the view.
-function endRound() {
+function sessionDocument() {
+  const attempts = st.attempts || [];
+  const types = ["jab", "hook", "uppercut"];
+  const punchAccuracy = {};
+  const reactionTimes = {};
+  for (const type of types) {
+    const group = attempts.filter((attempt) => attempt.type === type);
+    const correct = group.filter((attempt) => attempt.correct).length;
+    punchAccuracy[type] = group.length ? Math.round((correct / group.length) * 100) : 0;
+    const samples = group.map((attempt) => attempt.reactionMs).filter((value) => typeof value === "number");
+    reactionTimes[type] = samples.length ? Math.round(samples.reduce((sum, value) => sum + value, 0) / samples.length) : 250;
+  }
+  const timing = st.timing;
+  const thrown = timing.perfect + timing.good + timing.miss;
+  const correct = timing.perfect + timing.good;
+  const defenseStats = defense.stats;
+  const defenseTotal = defenseStats.blocked + defenseStats.dodged + defenseStats.hit;
+  const samples = attempts.map((attempt) => attempt.reactionMs).filter((value) => typeof value === "number");
+  const timeline = [1, 2, 3, 4, 5].map((bucket) => {
+    const start = (MAX_RUNTIME / 5) * (bucket - 1);
+    const stop = (MAX_RUNTIME / 5) * bucket;
+    const window = attempts.filter((attempt) => attempt.t >= start && attempt.t < stop);
+    const windowCorrect = window.filter((attempt) => attempt.correct).length;
+    return {
+      t: Math.round(stop),
+      velocity: 0,
+      accuracy: window.length ? Math.round((windowCorrect / window.length) * 100) : 0,
+    };
+  });
+  const nowIso = new Date().toISOString();
+  return {
+    session_id: `analysis-${Date.now()}`,
+    timestamp: nowIso,
+    end_time: nowIso,
+    score: st.score,
+    correct_punches: correct,
+    total_punches: thrown,
+    summary: {
+      score: st.score,
+      avg_velocity: 0,
+      avg_reaction_time: samples.length ? Math.round(samples.reduce((sum, value) => sum + value, 0) / samples.length) : 250,
+      accuracy: thrown ? Math.round((correct / thrown) * 1000) / 10 : 0,
+      critical_prevention: defenseTotal ? Math.round(((defenseStats.blocked + defenseStats.dodged) / defenseTotal) * 100) : 0,
+      total_punches: thrown,
+    },
+    punch_accuracy: punchAccuracy,
+    reaction_times: reactionTimes,
+    defense: { blocked: defenseStats.blocked, dodged: defenseStats.dodged, hit: defenseStats.hit },
+    timeline,
+    punch_attempts: attempts.map((attempt) => ({
+      predicted_punch: attempt.type || "jab",
+      was_correct: attempt.correct,
+      hit_target: attempt.hitTarget,
+      timing_grade: attempt.grade,
+      reaction_time_ms: attempt.reactionMs,
+      response_time: attempt.reactionMs / 1000,
+    })),
+  };
+}
+
+// Save the round, then open that session on the dashboard instead of a blank camera.
+async function endRound() {
   mode = "over";
-  const d = defense.stats, t = st.timing;
-  console.log(`Final score: ${st.score}  |  Timing - Perfect: ${t.perfect}, Good: ${t.good}, Miss: ${t.miss}`);
-  console.log(`Defense stats - Blocked: ${d.blocked}, Dodged: ${d.dodged}, Hit: ${d.hit}`);
-  video.srcObject.getTracks().forEach((track) => track.stop());
+  const document = sessionDocument();
+  showPanel("<p>Saving your session…</p>");
+  video.srcObject?.getTracks().forEach((track) => track.stop());
   ctx.clearRect(0, 0, W, H);
+  const base = sessionStorage.getItem("pp.apiBase") || "";
+  const token = sessionStorage.getItem("pp.apiToken") || "";
+  let sessionId = document.session_id;
+  try {
+    if (!base || !token) throw new Error("Sign in before starting a session so it can be saved.");
+    const response = await fetch(`${base.replace(/\/$/, "")}/session`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify(document),
+    });
+    if (!response.ok) throw new Error("The session could not be saved.");
+    const saved = await response.json();
+    sessionId = saved.session_id || sessionId;
+  } catch (error) {
+    showPanel(`<p>${error.message}</p><p>Score: ${document.score}</p>`);
+    return;
+  }
+  window.location.assign(`/?view=dashboard&session=${encodeURIComponent(sessionId)}`);
 }
 
 // ── Main loop ────────────────────────────────────────────────────────────────
@@ -685,10 +771,18 @@ async function init() {
       runningMode: "VIDEO", numPoses: 1,
       minPoseDetectionConfidence: 0.5, minTrackingConfidence: 0.5,
     });
-    [landmarker, session] = await Promise.all([
-      makeLandmarker("GPU").catch(() => makeLandmarker("CPU")),
-      ort.InferenceSession.create("punch_model.onnx", { executionProviders: ["wasm"] }),
-    ]);
+    // The full ONNX build initializes WebGL and clears MediaPipe's GL context
+    // (activeTexture on undefined). Use the wasm build, and start pose on the
+    // CPU if the GPU delegate cannot create a context.
+    try {
+      landmarker = await makeLandmarker("GPU");
+    } catch (gpuError) {
+      console.warn("GPU pose tracking unavailable, using CPU", gpuError);
+      landmarker = await makeLandmarker("CPU");
+    }
+    session = await ort.InferenceSession.create(new URL("punch_model.onnx", import.meta.url).href, {
+      executionProviders: ["wasm"],
+    });
     mode = "ready";
     showPanel(`<h2>Perfect Punch</h2><p>Stand back so your head, shoulders and hips are in view.</p>
       <p>Hit targets with the called hand as the ring closes. Dodge or block the orange attacks.</p>`, "Start round");

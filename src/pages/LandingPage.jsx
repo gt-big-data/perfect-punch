@@ -1,7 +1,7 @@
 import React from 'react';
 import { useAuth } from '../contexts/AuthContext';
 const LandingPage = ({ onNavigate, onBackToHome }) => {
-  const { user } = useAuth();
+  const { user, getAccessToken, login } = useAuth();
   const fullName = user?.name || 'Fighter';
   const firstName = fullName.split(' ')[0];
   const containerStyle = {
@@ -129,9 +129,17 @@ const LandingPage = ({ onNavigate, onBackToHome }) => {
     e.target.style.boxShadow = '0 4px 16px rgba(0, 0, 0, 0.2)';
   };
 
-  // CameraMirror captures the player's browser camera. The old analysis
-  // endpoint launched a camera on the server and wrote shared session files.
-  const handleStartAnalysis = () => onNavigate('camera');
+  // The browser analysis game is a static page. It saves with the token from this sign-in.
+  const handleStartAnalysis = async () => {
+    const token = await getAccessToken();
+    if (!token) {
+      login();
+      return;
+    }
+    sessionStorage.setItem('pp.apiToken', token);
+    sessionStorage.setItem('pp.apiBase', import.meta.env.VITE_API_BASE_URL || '');
+    window.location.assign('/analysis/');
+  };
 
   return (
     <div style={containerStyle}>
