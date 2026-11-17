@@ -5,6 +5,7 @@ import LandingPage from './pages/LandingPage'
 import CameraMirror from './pages/CameraMirror'
 import LoginPage from './pages/LoginPage'
 import DashboardPage from "./pages/DashboardPage"
+import ProgressPage from "./pages/ProgressPage"
 import SignupPage from './pages/SignupPage'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
 
@@ -13,6 +14,9 @@ function AppContent() {
   const [currentPage, setCurrentPage] = useState('dashboard')
   const [currentSessionId, setCurrentSessionId] = useState(null)
   const [analysisMetrics, setAnalysisMetrics] = useState(null)
+  // Where the progress page was opened from, so its back button returns there
+  // instead of always dropping the user on the dashboard.
+  const [progressOrigin, setProgressOrigin] = useState('dashboard')
 
 
   // navigation helpers
@@ -60,6 +64,17 @@ function AppContent() {
     setCurrentPage('dashboard')
   }
 
+  const goToProgress = (origin = 'dashboard') => {
+    setProgressOrigin(origin)
+    setCurrentPage('progress')
+  }
+
+  // Returns to whichever page opened the progress view, on the same session
+  // the user drilled into - the session id is deliberately left untouched.
+  const backFromProgress = () => {
+    setCurrentPage(progressOrigin)
+  }
+
 
   if (loading) {
     return (
@@ -101,6 +116,7 @@ function AppContent() {
         <LandingPage 
           onNavigate={handleStartAnalysis} 
           onBackToHome={backToHome}
+          onViewProgress={() => goToProgress('landing')}
         />
       )}
 
@@ -112,7 +128,21 @@ function AppContent() {
       )}
 
       {currentPage === 'dashboard' && (
-        <DashboardPage onNavigate={backToLanding} sessionId={currentSessionId} metricsData={analysisMetrics} />
+        <DashboardPage
+          onNavigate={backToLanding}
+          onViewProgress={goToProgress}
+          sessionId={currentSessionId}
+          metricsData={analysisMetrics}
+        />
+      )}
+
+      {currentPage === 'progress' && (
+        <ProgressPage
+          onNavigate={backFromProgress}
+          backLabel={progressOrigin === 'landing' ? '← Back to Home' : '← Back to Dashboard'}
+          sessionId={currentSessionId}
+          metricsData={analysisMetrics}
+        />
       )}
     </div>
   )

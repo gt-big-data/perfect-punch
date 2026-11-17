@@ -14,9 +14,29 @@ const demoModeError = {
 
 const createStubClient = () => {
   console.warn(`⚠️ ${demoModeError.message} Running in demo mode without auth.`)
+
+  // Every query terminates in { data, error } so callers can await any chain
+  // without special-casing demo mode.
+  const queryResult = Promise.resolve({ data: null, error: demoModeError })
+  const queryBuilder = () => {
+    const chain = {
+      select: () => chain,
+      insert: () => chain,
+      upsert: () => chain,
+      update: () => chain,
+      delete: () => chain,
+      eq: () => chain,
+      order: () => chain,
+      limit: () => chain,
+      then: (resolve, reject) => queryResult.then(resolve, reject),
+    }
+    return chain
+  }
+
   return {
     auth: {
       getSession: async () => ({ data: { session: null }, error: null }),
+      getUser: async () => ({ data: { user: null }, error: null }),
       onAuthStateChange: () => ({
         data: { subscription: { unsubscribe: () => {} } },
       }),
@@ -24,6 +44,7 @@ const createStubClient = () => {
       signUp: async () => ({ data: null, error: demoModeError }),
       signOut: async () => ({ error: null }),
     },
+    from: queryBuilder,
   }
 }
 

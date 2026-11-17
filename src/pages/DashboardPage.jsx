@@ -1,4 +1,24 @@
-import React, { useEffect, useState } from "react";
+import React from "react";
+import { useTrainingData } from "../hooks/useTrainingData";
+import { buildTrend, buildSeries } from "../lib/trendAnalysis";
+import {
+  RED_LIGHT,
+  RED_MID,
+  RED_DARK,
+  PUNCH_COLORS,
+  ACCURACY_COLOR,
+  REACTION_COLOR,
+  GRADE_RED,
+  GRADE_YELLOW,
+  GRADE_GREEN,
+  percentColor,
+  cardStyle,
+  eyebrowStyle,
+  dividerStyle,
+  tooltipStyle,
+  primaryButtonStyle,
+} from "./analysisTheme";
+import { ChartHeader, ChartFooter } from "./analysisChrome";
 import {
   BarChart,
   Bar,
@@ -15,154 +35,16 @@ import {
   ResponsiveContainer,
 } from "recharts";
 
-const DashboardPage = ({ onNavigate, sessionId = null, metricsData = null }) => {
-  const [sessionData, setSessionData] = useState(null);
-  const [loading, setLoading] = useState(true);
-
-  // ---------------------------------------------------------
-  // 🚀 FETCH REAL SESSION DATA (METRICS FIRST, THEN LOCALSTORAGE, THEN API)
-  // ---------------------------------------------------------
-  useEffect(() => {
-    setLoading(true);
-
-    async function fetchData() {
-      console.log("🔍 Fetching session data...", { sessionId, metricsData });
-
-      // 0️⃣ FIRST: Check if metrics were passed directly from analysis
-      if (metricsData) {
-        try {
-          console.log("✅ Using metrics data from analysis:", metricsData);
-          // The metrics data from the analysis is already transformed
-          const metrics = Array.isArray(metricsData) ? metricsData[0] : metricsData;
-          console.log("📊 Transformed metrics structure:", {
-            hasSession: !!metrics.session_id,
-            hasSummary: !!metrics.summary,
-            hasPunchAccuracy: !!metrics.punch_accuracy,
-            hasReactionTimes: !!metrics.reaction_times,
-            hasDefense: !!metrics.defense
-          });
-          setSessionData(metrics);
-          setLoading(false);
-          return;
-        } catch (err) {
-          console.error("❌ Error processing metrics data:", err);
-        }
-      }
-
-      // 1️⃣ THEN: Try loading from localStorage (for demo sessions)
-      if (sessionId && sessionId.startsWith('demo-')) {
-        try {
-          const storedKey = `demo_session_${sessionId}`;
-          const storedData = localStorage.getItem(storedKey);
-          
-          if (storedData) {
-            const data = JSON.parse(storedData);
-            console.log("✅ Loaded demo session from localStorage:", data.session_id);
-            console.log("📊 Session data structure:", {
-              hasSummary: !!data.summary,
-              hasPunchAccuracy: !!data.punch_accuracy,
-              hasReactionTimes: !!data.reaction_times,
-              hasDefense: !!data.defense,
-              hasTimeline: !!data.timeline,
-              timelineLength: data.timeline?.length || 0
-            });
-            setSessionData(data);
-            setLoading(false);
-            return;
-          } else {
-            console.warn("⚠️ Demo session not found in localStorage:", storedKey);
-          }
-        } catch (error) {
-          console.error("❌ Error loading from localStorage:", error);
-        }
-      }
-
-      // 2️⃣ SECOND: If no sessionId provided, check for latest demo session
-      if (!sessionId) {
-        try {
-          const demoKeys = Object.keys(localStorage).filter(k => k.startsWith('demo_session_'));
-          if (demoKeys.length > 0) {
-            // Load all sessions and sort by timestamp (newest first)
-            const sessions = demoKeys.map(key => {
-              try {
-                const storedData = localStorage.getItem(key);
-                if (storedData) {
-                  const data = JSON.parse(storedData);
-                  return {
-                    key,
-                    data,
-                    timestamp: data.timestamp ? new Date(data.timestamp).getTime() : 0
-                  };
-                }
-              } catch (e) {
-                console.error(`Error parsing session ${key}:`, e);
-              }
-              return null;
-            }).filter(s => s !== null);
-            
-            // Sort by timestamp descending (newest first)
-            sessions.sort((a, b) => b.timestamp - a.timestamp);
-            
-            if (sessions.length > 0) {
-              const latestSession = sessions[0].data;
-              console.log("✅ Loaded latest demo session from localStorage:", latestSession.session_id);
-              console.log("📊 Session timestamp:", latestSession.timestamp);
-              console.log("📊 Session data structure:", {
-                hasSummary: !!latestSession.summary,
-                hasPunchAccuracy: !!latestSession.punch_accuracy,
-                hasReactionTimes: !!latestSession.reaction_times,
-                hasDefense: !!latestSession.defense,
-                hasTimeline: !!latestSession.timeline,
-                timelineLength: latestSession.timeline?.length || 0,
-                score: latestSession.summary?.score,
-                totalPunches: latestSession.summary?.total_punches
-              });
-              setSessionData(latestSession);
-              setLoading(false);
-              return;
-            }
-          }
-        } catch (error) {
-          console.error("❌ Error loading latest demo session:", error);
-        }
-      }
-
-      // 3️⃣ THIRD: Try API endpoint
-      try {
-        const API_BASE_URL =
-          import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
-
-        let url = `${API_BASE_URL}/session/latest`;
-        if (sessionId) {
-          url += `?session_id=${encodeURIComponent(sessionId)}`;
-        }
-
-        const response = await fetch(url, { cache: "no-store" });
-
-        if (!response.ok) {
-          throw new Error(`Backend error: ${response.status}`);
-        }
-
-        const data = await response.json();
-        console.log("📊 LOADED SESSION FROM API:", data);
-
-        // Accept demo_001 as fallback if no real data is available
-        // This allows the dashboard to display something while waiting for real game data
-        if (data.session_id === "demo_001") {
-          console.warn("⚠️ Backend returned demo data - this is fallback data. Play a game to see your real session data.");
-        }
-
-        setSessionData(data);
-      } catch (error) {
-        console.error("❌ Failed to load session data:", error);
-        setSessionData(null);
-      } finally {
-        setLoading(false);
-      }
-    }
-
-    fetchData();
-  }, [sessionId]);
+const DashboardPage = ({
+  onNavigate,
+  onViewProgress = () => {},
+  sessionId = null,
+  metricsData = null,
+}) => {
+  const { sessionData, pastSessions, loading } = useTrainingData({
+    sessionId,
+    metricsData,
+  });
 
   // ---------------------------------------------------------
   // ⚠️ LOADING OR ERROR STATES
@@ -214,17 +96,7 @@ const DashboardPage = ({ onNavigate, sessionId = null, metricsData = null }) => 
         </div>
         <button
           onClick={() => onNavigate("landing")}
-          style={{
-            backgroundColor: "#d6392c",
-            color: "white",
-            border: "none",
-            borderRadius: "16px",
-            padding: "12px 24px",
-            fontSize: "1rem",
-            fontWeight: "700",
-            cursor: "pointer",
-            boxShadow: "0 8px 24px rgba(214, 57, 44, 0.45)",
-          }}
+          style={primaryButtonStyle}
         >
           Go to Landing Page
         </button>
@@ -256,15 +128,6 @@ const DashboardPage = ({ onNavigate, sessionId = null, metricsData = null }) => 
 
   const defense = sessionData.defense || { blocked: 0, dodged: 0, hit: 0 };
 
-  // One red ramp, light -> dark, shared by every chart: the lightest tone is
-  // always the best outcome (Jab / Dodged) and the darkest the worst (Hit).
-  const RED_LIGHT = "#ef8c7a";
-  const RED_MID = "#df4b42";
-  const RED_DARK = "#7e2026";
-  const PUNCH_COLORS = [RED_LIGHT, RED_MID, RED_DARK];
-  const VELOCITY_COLOR = "#f2695c";
-  const ACCURACY_COLOR = "#e5c14c";
-
   const defenseData = [
     { name: "Dodged", value: defense.dodged || 0, color: RED_LIGHT },
     { name: "Blocked", value: defense.blocked || 0, color: RED_MID },
@@ -276,32 +139,12 @@ const DashboardPage = ({ onNavigate, sessionId = null, metricsData = null }) => 
     color: PUNCH_COLORS[idx % PUNCH_COLORS.length],
   }));
 
-  // Shared dark tooltip so the hover layer stops flashing white on black.
-  const tooltipStyle = {
-    background: "#1c1c1c",
-    border: "1px solid #3a3a3a",
-    borderRadius: "10px",
-    color: "#f5f5f5",
-  };
-
   const totalDefense =
     (defense.blocked || 0) +
     (defense.dodged || 0) +
     (defense.hit || 0);
 
-  // Ensure timeline exists and is an array
-  const timeline = Array.isArray(sessionData.timeline) && sessionData.timeline.length > 0
-    ? sessionData.timeline
-    : [
-        { t: 5, velocity: 5.0, accuracy: 0 },
-        { t: 10, velocity: 5.0, accuracy: 0 },
-        { t: 15, velocity: 5.0, accuracy: 0 },
-        { t: 20, velocity: 5.0, accuracy: 0 },
-        { t: 25, velocity: 5.0, accuracy: 0 }
-      ];
-
   // Calculate derived metrics from actual recorded data
-  const avgVelocityMs = sessionData.summary?.avg_velocity ?? 0; // Already in m/s
   const totalPunches = sessionData.summary?.total_punches ?? 0;
 
   // Punches landed vs. targets faced. Both numbers come from the defense
@@ -327,17 +170,6 @@ const DashboardPage = ({ onNavigate, sessionId = null, metricsData = null }) => 
   ];
   const medal = MEDAL_TIERS.find((t) => targetHitRate <= t.max);
 
-  // Avg punch speed (hand velocity). Boxing biomechanics benchmarks:
-  // recreational boxers land around 6-8 m/s, competitive amateurs 7.5-9.5 m/s
-  // (amateur mean ~9.1 m/s), elite/professional boxers 8.5-11+ m/s.
-  const SPEED_TIERS = [
-    { max: 7.5, ...BRONZE, note: "below the 7.5-9.5 m/s amateur range" },
-    { max: 9.2, ...SILVER, note: "in the 7.5-9.5 m/s amateur range" },
-    { max: Infinity, ...GOLD, note: "elite range (9.2+ m/s)" },
-  ];
-  const speedMedal =
-    avgVelocityMs > 0 ? SPEED_TIERS.find((t) => avgVelocityMs < t.max) : null;
-
   // Avg reaction time, lower is better. Amateur competitors typically sit at
   // 300-400 ms, pro boxers average ~200 ms, elite fighters go under 150 ms.
   const avgReactionMs = sessionData.summary?.avg_reaction_time ?? 0;
@@ -348,18 +180,6 @@ const DashboardPage = ({ onNavigate, sessionId = null, metricsData = null }) => 
   ];
   const reactionMedal =
     avgReactionMs > 0 ? REACTION_TIERS.find((t) => avgReactionMs < t.max) : null;
-
-  // Percentage metrics are graded by color instead of a medal:
-  // 0-50 red, 50-75 yellow, 75-100 green.
-  const GRADE_RED = "#d6392c";
-  const GRADE_YELLOW = "#e3b341";
-  const GRADE_GREEN = "#3fb950";
-  const PERCENT_COLORS = [
-    { max: 50, color: GRADE_RED },
-    { max: 75, color: GRADE_YELLOW },
-    { max: Infinity, color: GRADE_GREEN },
-  ];
-  const percentColor = (pct) => PERCENT_COLORS.find((t) => pct < t.max).color;
 
   const accuracyPct = sessionData.summary?.accuracy ?? 0;
   const criticalPreventionPct = sessionData.summary?.critical_prevention ?? 0;
@@ -393,18 +213,6 @@ const DashboardPage = ({ onNavigate, sessionId = null, metricsData = null }) => 
       return "Unknown";
     }
   };
-
-  // Format timeline for Performance Over Session - only use recorded data
-  const performanceTimeline = timeline.map((point) => {
-    const minutes = Math.floor(point.t / 60);
-    const seconds = point.t % 60;
-    return {
-      time: `${minutes}:${String(Math.floor(seconds)).padStart(2, '0')}`,
-      timeValue: point.t, // Keep numeric for sorting
-      velocity: point.velocity ?? 0, // Actual recorded velocity
-      accuracy: point.accuracy ?? 0 // Actual recorded accuracy
-    };
-  }).sort((a, b) => a.timeValue - b.timeValue);
 
   // ---------------------------------------------------------
   // 📐 CHART AXES, LEGEND STATS AND SHARED CARD CHROME
@@ -467,128 +275,70 @@ const DashboardPage = ({ onNavigate, sessionId = null, metricsData = null }) => 
     Math.max(...reactionTimeData.map((d) => d.time), 1)
   );
 
-  // Performance timeline: both axes get their own padded, rounded range so the
-  // two lines stay readable instead of hugging the top or bottom of the plot.
-  const velocityValues = performanceTimeline.map((p) => p.velocity);
-  const accuracyValues = performanceTimeline.map((p) => p.accuracy);
-  const velocityDomain = [
-    Math.max(0, Math.floor(Math.min(...velocityValues) - 0.5)),
-    Math.ceil(Math.max(...velocityValues) + 0.5),
+  // ---------------------------------------------------------
+  // 📈 PERFORMANCE OVER SESSIONS
+  // Accuracy and reaction time share one chart, but their units never could
+  // (%, ms). Each line is scaled against the user's own best
+  // session for that metric, so 100 means "your best ever" and every line
+  // rises when the user improves - reaction time included, which is inverted
+  // because a lower number there is the better result. Raw values are kept on
+  // each point so the tooltip can show what was actually recorded.
+  // ---------------------------------------------------------
+  const sessionSeries = buildSeries(sessionData, pastSessions);
+
+  const TRACKED = [
+    { key: "accuracy", label: "Punch accuracy", color: ACCURACY_COLOR, summaryKey: "accuracy", format: (v) => `${Math.round(v)}%` },
+    { key: "reaction", label: "Reaction time", color: REACTION_COLOR, summaryKey: "avg_reaction_time", lowerIsBetter: true, format: (v) => `${Math.round(v)} ms` },
   ];
-  const accuracyDomain = [
-    Math.max(0, Math.floor((Math.min(...accuracyValues) - 5) / 10) * 10),
-    Math.min(100, Math.ceil((Math.max(...accuracyValues) + 5) / 10) * 10),
-  ];
 
-  // Both timeline axes get whole-number ticks so the two scales stay legible
-  // side by side instead of landing on quarters.
-  const rangeTicks = ([min, max], minStep) => {
-    const step = Math.max(minStep, Math.ceil((max - min) / 4 / minStep) * minStep);
-    const ticks = [];
-    for (let v = min; v <= max + step / 2; v += step) ticks.push(Math.round(v));
-    return ticks;
+  const trackedBest = (metric) => {
+    const values = sessionSeries.map((p) => p[metric.key]).filter((v) => v != null && v > 0);
+    if (!values.length) return null;
+    return metric.lowerIsBetter ? Math.min(...values) : Math.max(...values);
   };
-  const velocityTicks = rangeTicks(velocityDomain, 1);
-  const accuracyTicks = rangeTicks(accuracyDomain, 10);
-  velocityDomain[1] = Math.max(velocityDomain[1], velocityTicks[velocityTicks.length - 1]);
-  accuracyDomain[1] = Math.max(accuracyDomain[1], accuracyTicks[accuracyTicks.length - 1]);
 
-  const avgTimelineVelocity =
-    velocityValues.reduce((sum, v) => sum + v, 0) / (velocityValues.length || 1);
-  const avgTimelineAccuracy =
-    accuracyValues.reduce((sum, v) => sum + v, 0) / (accuracyValues.length || 1);
-
-  const cardStyle = {
-    borderRadius: "18px",
-    padding: "28px 32px 24px",
-    background: "#101010",
-    border: "1px solid #262626",
+  const relativeTo = (metric, value) => {
+    const best = trackedBest(metric);
+    if (best == null || value == null || value <= 0) return null;
+    return metric.lowerIsBetter ? (best / value) * 100 : (value / best) * 100;
   };
-  const titleStyle = {
-    fontSize: "1.3rem",
-    fontWeight: "700",
-    color: "#f2f2f2",
-    margin: 0,
-  };
-  const eyebrowStyle = {
-    fontSize: "0.72rem",
-    letterSpacing: "0.18em",
-    color: "#8a8a8a",
-    fontWeight: "600",
-  };
-  const dividerStyle = { height: "1px", background: "#262626" };
 
-  // Title on the left, a headline stat (or a custom node) on the right.
-  const ChartHeader = ({ title, statLabel, statValue, statUnit, statColor, right }) => (
-    <>
-      <div
-        style={{
-          display: "flex",
-          alignItems: right ? "center" : "flex-end",
-          justifyContent: "space-between",
-          gap: "24px",
-          flexWrap: "wrap",
-        }}
-      >
-        <h2 style={titleStyle}>{title}</h2>
-        {right || (
-          <div style={{ textAlign: "right" }}>
-            <div style={eyebrowStyle}>{statLabel}</div>
-            <div
-              style={{
-                fontSize: "2rem",
-                fontWeight: "800",
-                lineHeight: "1.1",
-                color: statColor || "#ffffff",
-              }}
-            >
-              {statValue}
-              <span style={{ color: statColor || RED_MID }}>{statUnit}</span>
-            </div>
-          </div>
-        )}
-      </div>
-      <div style={{ ...dividerStyle, margin: "18px 0 4px" }} />
-    </>
-  );
+  const sessionTrendData = sessionSeries.map((point) => {
+    const row = { label: point.label, isCurrent: point.isCurrent };
+    for (const metric of TRACKED) {
+      row[metric.key] = relativeTo(metric, point[metric.key]);
+      row[`${metric.key}Raw`] = point[metric.key];
+    }
+    return row;
+  });
 
-  const ChartFooter = ({ items, note }) => (
-    <div
-      style={{
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "space-between",
-        gap: "16px",
-        flexWrap: "wrap",
-      }}
-    >
-      <div style={{ display: "flex", alignItems: "center", gap: "22px", flexWrap: "wrap" }}>
-        {items.map((item) => (
-          <span
-            key={item.name}
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: "9px",
-              color: "#d2d2d2",
-              fontSize: "0.95rem",
-            }}
-          >
-            <span
-              style={{
-                width: "11px",
-                height: "11px",
-                borderRadius: "3px",
-                background: item.color,
-              }}
-            />
-            {item.name}
-          </span>
-        ))}
-      </div>
-      {note && <span style={{ color: "#8a8a8a", fontSize: "0.9rem" }}>{note}</span>}
-    </div>
-  );
+  // One padded range covering all three lines; the top is always 100 because
+  // that is by definition the user's best session.
+  const relativeValues = sessionTrendData
+    .flatMap((row) => TRACKED.map((m) => row[m.key]))
+    .filter((v) => v != null);
+  const relativeFloor = relativeValues.length
+    ? Math.max(0, Math.floor((Math.min(...relativeValues) - 4) / 5) * 5)
+    : 0;
+  const relativeDomain = [relativeFloor, 100];
+  const relativeStep = Math.max(5, Math.round((100 - relativeFloor) / 4 / 5) * 5);
+  const relativeTicks = [];
+  for (let v = relativeFloor; v < 100; v += relativeStep) relativeTicks.push(v);
+  relativeTicks.push(100);
+
+  const enoughForTrendChart = sessionTrendData.length >= 2;
+
+  // ---------------------------------------------------------
+  // 📈 THIS SESSION VS PAST AVERAGES
+  // The comparison itself lives in lib/trendAnalysis so this summary and the
+  // full progress page always reach the same verdict.
+  // ---------------------------------------------------------
+  const {
+    comparedMetrics,
+    trendScore,
+    trend,
+    sessionsLabel: trendSessionsLabel,
+  } = buildTrend(sessionData, pastSessions);
 
   // Percentages sit inside their own pie slice rather than on leader lines.
   const renderPieLabel = ({ cx, cy, midAngle, innerRadius, outerRadius, percent }) => {
@@ -643,17 +393,7 @@ const DashboardPage = ({ onNavigate, sessionId = null, metricsData = null }) => 
 
         <button
           onClick={() => onNavigate("landing")}
-          style={{
-            backgroundColor: "#d6392c",
-            color: "white",
-            border: "none",
-            borderRadius: "16px",
-            padding: "12px 24px",
-            fontSize: "1rem",
-            fontWeight: "700",
-            cursor: "pointer",
-            boxShadow: "0 8px 24px rgba(214, 57, 44, 0.45)",
-          }}
+          style={primaryButtonStyle}
         >
           ← Back to Landing
         </button>
@@ -732,49 +472,6 @@ const DashboardPage = ({ onNavigate, sessionId = null, metricsData = null }) => 
               ? `${punchesLanded} punches landed of ${targetsFaced} targets (${targetHitRate}%)`
               : `${targetHitRate}% of targets hit`}
           </p>
-        </div>
-
-        {/* Average Punch Speed */}
-        <div
-          style={{
-            borderRadius: '16px',
-            padding: '24px',
-            background: "#121212",
-            border: "1px solid #333333",
-            boxShadow: "0 8px 24px rgba(0, 0, 0, 0.3)",
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '8px' }}>
-            <div style={{ width: '12px', height: '12px', borderRadius: '9999px', backgroundColor: speedMedal ? speedMedal.color : "#d6392c" }}></div>
-            <h2 style={{ fontSize: '0.875rem', fontWeight: '600', color: "#b0b0b8" }}>
-              Avg Punch Speed
-            </h2>
-          </div>
-          {speedMedal ? (
-            <>
-              <p
-                style={{
-                  fontSize: '1.875rem',
-                  fontWeight: '800',
-                  color: speedMedal.color,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: '10px',
-                }}
-              >
-                <span aria-hidden="true">{speedMedal.icon}</span>
-                {speedMedal.name}
-              </p>
-              <p style={{ fontSize: '0.8125rem', marginTop: '4px', color: "#9ca3af" }}>
-                {avgVelocityMs.toFixed(1)} m/s - {speedMedal.note}
-              </p>
-            </>
-          ) : (
-            <p style={{ fontSize: '1.875rem', fontWeight: '800', color: "#d6392c" }}>
-              {avgVelocityMs.toFixed(1)} m/s
-            </p>
-          )}
         </div>
 
         {/* Reaction Time */}
@@ -862,9 +559,11 @@ const DashboardPage = ({ onNavigate, sessionId = null, metricsData = null }) => 
           </p>
         </div>
 
-        {/* Total Punches */}
+        {/* Total Punches - spans the full row so the odd card out never
+            leaves a gap beside it. */}
         <div
           style={{
+            gridColumn: '1 / -1',
             borderRadius: '16px',
             padding: '24px',
             background: "#121212",
@@ -905,7 +604,11 @@ const DashboardPage = ({ onNavigate, sessionId = null, metricsData = null }) => 
             statColor={avgAccuracyColor}
           />
           <ResponsiveContainer width="100%" height={320}>
-            <BarChart data={punchAccuracyData} margin={{ top: 28, right: 16, left: 0, bottom: 8 }}>
+            <BarChart
+              data={punchAccuracyData}
+              margin={{ top: 28, right: 16, left: 0, bottom: 8 }}
+              barCategoryGap="20%"
+            >
               <CartesianGrid vertical={false} stroke="#232323" />
               <XAxis
                 dataKey="name"
@@ -929,7 +632,7 @@ const DashboardPage = ({ onNavigate, sessionId = null, metricsData = null }) => 
                 cursor={{ fill: "rgba(255,255,255,0.05)" }}
                 formatter={(v) => [`${Math.round(v)}%`, "Accuracy"]}
               />
-              <Bar dataKey="value" maxBarSize={130} isAnimationActive={false}>
+              <Bar dataKey="value" maxBarSize={300} isAnimationActive={false}>
                 {punchAccuracyData.map((_, idx) => (
                   <Cell key={idx} fill={PUNCH_COLORS[idx % PUNCH_COLORS.length]} />
                 ))}
@@ -958,7 +661,11 @@ const DashboardPage = ({ onNavigate, sessionId = null, metricsData = null }) => 
             statColor={avgReactionColor}
           />
           <ResponsiveContainer width="100%" height={320}>
-            <BarChart data={reactionTimeData} margin={{ top: 28, right: 16, left: 0, bottom: 8 }}>
+            <BarChart
+              data={reactionTimeData}
+              margin={{ top: 28, right: 16, left: 0, bottom: 8 }}
+              barCategoryGap="20%"
+            >
               <CartesianGrid vertical={false} stroke="#232323" />
               <XAxis
                 dataKey="name"
@@ -981,7 +688,7 @@ const DashboardPage = ({ onNavigate, sessionId = null, metricsData = null }) => 
                 cursor={{ fill: "rgba(255,255,255,0.05)" }}
                 formatter={(v) => [`${Math.round(v)} ms`, "Reaction"]}
               />
-              <Bar dataKey="time" maxBarSize={130} isAnimationActive={false}>
+              <Bar dataKey="time" maxBarSize={300} isAnimationActive={false}>
                 {reactionTimeData.map((_, idx) => (
                   <Cell key={idx} fill={PUNCH_COLORS[idx % PUNCH_COLORS.length]} />
                 ))}
@@ -1104,96 +811,216 @@ const DashboardPage = ({ onNavigate, sessionId = null, metricsData = null }) => 
           </div>
         </section>
 
-        {/* Performance Over Session */}
+        {/* Progress vs past sessions */}
         <section style={cardStyle}>
           <ChartHeader
-            title="Performance over session"
+            title="Progress vs past sessions"
+            right={
+              trend ? (
+                <div style={{ textAlign: 'right' }}>
+                  <div style={eyebrowStyle}>OVERALL CHANGE</div>
+                  <div
+                    style={{
+                      fontSize: '2rem',
+                      fontWeight: '800',
+                      lineHeight: '1.1',
+                      color: trend.color,
+                    }}
+                  >
+                    {trendScore >= 0 ? '+' : ''}
+                    {trendScore.toFixed(1)}
+                    <span style={{ color: trend.color }}>%</span>
+                  </div>
+                </div>
+              ) : (
+                <div style={{ textAlign: 'right' }}>
+                  <div style={eyebrowStyle}>SESSIONS ON RECORD</div>
+                  <div style={{ fontSize: '2rem', fontWeight: '800', lineHeight: '1.1', color: "#ffffff" }}>
+                    {pastSessions.length + 1}
+                  </div>
+                </div>
+              )
+            }
+          />
+
+          {/* Headline verdict */}
+          <div style={{ textAlign: 'center', padding: '28px 0 24px' }}>
+            <div style={{ color: "#b0b0b8", fontSize: '1.25rem' }}>You are...</div>
+            <div
+              style={{
+                fontSize: 'clamp(2.25rem, 6vw, 4rem)',
+                fontWeight: '800',
+                letterSpacing: '-0.01em',
+                lineHeight: '1.1',
+                marginTop: '8px',
+                color: trend ? trend.color : "#ffffff",
+              }}
+            >
+              {trend ? trend.headline : 'Just getting started'}
+            </div>
+            <p style={{ color: "#8a8a8a", fontSize: '1rem', marginTop: '12px' }}>
+              {trend
+                ? `${trend.note} Measured ${trendSessionsLabel}.`
+                : 'No past sessions on record yet - finish another session and your trend will show up here.'}
+            </p>
+          </div>
+
+          {trend && (
+            <>
+              <div style={dividerStyle} />
+              {comparedMetrics.map((m) => {
+                const better = m.change >= 0;
+                const deltaColor = better ? GRADE_GREEN : GRADE_RED;
+                return (
+                  <div
+                    key={m.label}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '14px',
+                      padding: '14px 0',
+                      borderBottom: "1px solid #1f1f1f",
+                      flexWrap: 'wrap',
+                    }}
+                  >
+                    <span
+                      style={{
+                        width: '11px',
+                        height: '11px',
+                        borderRadius: '3px',
+                        background: deltaColor,
+                        flexShrink: 0,
+                      }}
+                    />
+                    <span style={{ flex: 1, color: "#e8e8e8", fontSize: '1.05rem', minWidth: '140px' }}>
+                      {m.label}
+                    </span>
+                    <span style={{ color: "#9a9a9a", fontSize: '1rem', minWidth: '110px', textAlign: 'right' }}>
+                      {m.format(m.past)} avg
+                    </span>
+                    <span style={{ color: "#ffffff", fontSize: '1rem', fontWeight: '700', minWidth: '90px', textAlign: 'right' }}>
+                      {m.format(m.current)}
+                    </span>
+                    <span style={{ color: deltaColor, fontSize: '1rem', fontWeight: '700', minWidth: '80px', textAlign: 'right' }}>
+                      {m.rawChange >= 0 ? '+' : ''}
+                      {m.rawChange.toFixed(1)}%
+                    </span>
+                  </div>
+                );
+              })}
+              <div style={{ marginTop: '20px' }}>
+                <ChartFooter
+                  items={[
+                    { name: 'Better than your average', color: GRADE_GREEN },
+                    { name: 'Below your average', color: GRADE_RED },
+                  ]}
+                  note={`Past average from ${pastSessions.length} session${pastSessions.length === 1 ? '' : 's'}`}
+                />
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'center', marginTop: '28px' }}>
+                <button
+                  onClick={() => onViewProgress()}
+                  style={primaryButtonStyle}
+                >
+                  View full progress analysis →
+                </button>
+              </div>
+            </>
+          )}
+        </section>
+
+        {/* Performance over sessions */}
+        <section style={cardStyle}>
+          <ChartHeader
+            title="Performance over sessions"
             right={
               <div style={{ display: 'flex', alignItems: 'center', gap: '32px', flexWrap: 'wrap' }}>
-                {[
-                  { color: VELOCITY_COLOR, label: "AVG VELOCITY", value: `${avgTimelineVelocity.toFixed(1)} m/s` },
-                  { color: ACCURACY_COLOR, label: "AVG ACCURACY", value: `${avgTimelineAccuracy.toFixed(1)}%` },
-                ].map((stat) => (
-                  <span key={stat.label} style={{ display: 'inline-flex', alignItems: 'center', gap: '10px' }}>
-                    <span style={{ width: '26px', height: '3px', borderRadius: '999px', background: stat.color }} />
-                    <span style={eyebrowStyle}>{stat.label}</span>
-                    <span style={{ fontSize: '1.05rem', fontWeight: '700', color: "#ffffff" }}>{stat.value}</span>
-                  </span>
-                ))}
+                {TRACKED.map((metric) => {
+                  const value = sessionData.summary?.[metric.summaryKey];
+                  return (
+                    <span key={metric.key} style={{ display: 'inline-flex', alignItems: 'center', gap: '10px' }}>
+                      <span style={{ width: '26px', height: '3px', borderRadius: '999px', background: metric.color }} />
+                      <span style={eyebrowStyle}>{metric.label.toUpperCase()}</span>
+                      <span style={{ fontSize: '1.05rem', fontWeight: '700', color: "#ffffff" }}>
+                        {value ? metric.format(value) : '-'}
+                      </span>
+                    </span>
+                  );
+                })}
               </div>
             }
           />
-          <ResponsiveContainer width="100%" height={400}>
-            <LineChart data={performanceTimeline} margin={{ top: 24, right: 16, left: 8, bottom: 8 }}>
-              <CartesianGrid vertical={false} stroke="#232323" />
-              <XAxis
-                dataKey="time"
-                tickLine={false}
-                axisLine={{ stroke: "#2b2b2b" }}
-                tick={{ fill: "#9a9a9a", fontSize: 13 }}
-                dy={10}
-                height={44}
+
+          {enoughForTrendChart ? (
+            <>
+              <ResponsiveContainer width="100%" height={380}>
+                <LineChart data={sessionTrendData} margin={{ top: 24, right: 16, left: 8, bottom: 8 }}>
+                  <CartesianGrid vertical={false} stroke="#232323" />
+                  <XAxis
+                    dataKey="label"
+                    tickLine={false}
+                    axisLine={{ stroke: "#2b2b2b" }}
+                    tick={{ fill: "#9a9a9a", fontSize: 13 }}
+                    interval="preserveStartEnd"
+                    minTickGap={28}
+                    dy={10}
+                    height={44}
+                  />
+                  <YAxis
+                    domain={relativeDomain}
+                    ticks={relativeTicks}
+                    tickLine={false}
+                    axisLine={false}
+                    width={72}
+                    tick={{ fill: "#8a8a8a", fontSize: 12 }}
+                    label={{
+                      value: '% of your best',
+                      angle: -90,
+                      position: 'insideLeft',
+                      fill: "#8a8a8a",
+                      fontSize: 12,
+                      style: { textAnchor: 'middle' },
+                    }}
+                  />
+                  <Tooltip
+                    contentStyle={tooltipStyle}
+                    cursor={{ stroke: "#3a3a3a" }}
+                    // Show what was actually recorded, not the scaled number.
+                    formatter={(value, name, entry) => {
+                      const metric = TRACKED.find((m) => m.label === name);
+                      const raw = metric ? entry?.payload?.[`${metric.key}Raw`] : null;
+                      return [raw != null ? metric.format(raw) : '-', name];
+                    }}
+                  />
+                  {TRACKED.map((metric) => (
+                    <Line
+                      key={metric.key}
+                      type="monotone"
+                      dataKey={metric.key}
+                      name={metric.label}
+                      stroke={metric.color}
+                      strokeWidth={2}
+                      connectNulls
+                      isAnimationActive={false}
+                      dot={{ r: 4, fill: "#101010", stroke: metric.color, strokeWidth: 2 }}
+                      activeDot={{ r: 6, fill: metric.color, stroke: "#101010", strokeWidth: 2 }}
+                    />
+                  ))}
+                </LineChart>
+              </ResponsiveContainer>
+
+              <ChartFooter
+                items={TRACKED.map((m) => ({ name: m.label, color: m.color }))}
+                note="Each line is scaled against your best session - higher is always better"
               />
-              <YAxis
-                yAxisId="left"
-                domain={velocityDomain}
-                ticks={velocityTicks}
-                tickLine={false}
-                axisLine={false}
-                width={72}
-                tick={{ fill: "#8a8a8a", fontSize: 12 }}
-                label={{
-                  value: 'Velocity (m/s)',
-                  angle: -90,
-                  position: 'insideLeft',
-                  fill: VELOCITY_COLOR,
-                  fontSize: 12,
-                  style: { textAnchor: 'middle' },
-                }}
-              />
-              <YAxis
-                yAxisId="right"
-                orientation="right"
-                domain={accuracyDomain}
-                ticks={accuracyTicks}
-                tickLine={false}
-                axisLine={false}
-                width={72}
-                tick={{ fill: "#8a8a8a", fontSize: 12 }}
-                label={{
-                  value: 'Accuracy (%)',
-                  angle: 90,
-                  position: 'insideRight',
-                  fill: ACCURACY_COLOR,
-                  fontSize: 12,
-                  style: { textAnchor: 'middle' },
-                }}
-              />
-              <Tooltip contentStyle={tooltipStyle} cursor={{ stroke: "#3a3a3a" }} />
-              <Line
-                yAxisId="left"
-                type="linear"
-                dataKey="velocity"
-                stroke={VELOCITY_COLOR}
-                strokeWidth={2}
-                name="Velocity (m/s)"
-                isAnimationActive={false}
-                dot={{ r: 5, fill: "#101010", stroke: VELOCITY_COLOR, strokeWidth: 2 }}
-                activeDot={{ r: 6, fill: VELOCITY_COLOR, stroke: "#101010", strokeWidth: 2 }}
-              />
-              <Line
-                yAxisId="right"
-                type="linear"
-                dataKey="accuracy"
-                stroke={ACCURACY_COLOR}
-                strokeWidth={2}
-                name="Accuracy (%)"
-                isAnimationActive={false}
-                dot={{ r: 5, fill: "#101010", stroke: ACCURACY_COLOR, strokeWidth: 2 }}
-                activeDot={{ r: 6, fill: ACCURACY_COLOR, stroke: "#101010", strokeWidth: 2 }}
-              />
-            </LineChart>
-          </ResponsiveContainer>
+            </>
+          ) : (
+            <p style={{ color: "#8a8a8a", fontSize: '1rem', padding: '32px 0', textAlign: 'center' }}>
+              Finish a second session and your three key metrics will chart here
+              side by side.
+            </p>
+          )}
         </section>
       </div>
 
