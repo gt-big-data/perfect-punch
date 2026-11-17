@@ -1,4 +1,12 @@
-import { supabase, isSupabaseConfigured } from './supabase'
+import { supabase } from './supabase'
+
+// Derived here rather than imported, so this module never depends on
+// supabase.js exporting anything beyond the client itself. When the
+// credentials are absent there is nothing to sync to and every path below
+// falls back to the local mirror.
+const isSupabaseConfigured = Boolean(
+  import.meta.env.VITE_SUPABASE_URL && import.meta.env.VITE_SUPABASE_ANON_KEY
+)
 
 // Where training sessions live.
 //

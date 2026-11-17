@@ -1,27 +1,27 @@
 [
   {
     "fighter_id": "fighter_sample_001",
-    "session_id": "session_20261015_181233",
-    "timestamp": "2026-10-15T18:12:33Z",
-    "punches_thrown": 10,
-    "correct_punches": 7,
+    "session_id": "session_20260416_044149",
+    "timestamp": "2026-04-16T04:41:49Z",
+    "punches_thrown": 9,
+    "correct_punches": 6,
     "metrics": {
       "offense": {
         "punch_accuracy": {
           "unit": "%",
           "types": {
-            "jab": 85.71,
-            "hook": 50.0,
-            "uppercut": 0.0
+            "jab": 83.33,
+            "hook": 0.0,
+            "uppercut": 50.0
           },
           "derived": {
-            "average": 70.0,
+            "average": 66.67,
             "average_description": "Average of all recorded punch accuracies across the session.",
             "best": 100.0,
-            "worst": 50.0,
+            "worst": 33.33,
             "all_points": [
+              33.33,
               66.67,
-              50.0,
               100.0
             ]
           }
@@ -29,19 +29,19 @@
         "punch_reaction_time": {
           "unit": "ms",
           "types": {
-            "jab": 1076.26,
-            "hook": 1031.3,
-            "uppercut": 1022.99
+            "jab": 1479.26,
+            "hook": 2023.28,
+            "uppercut": 1381.93
           },
           "derived": {
-            "average": 1061.94,
+            "average": 1518.08,
             "average_description": "Average reaction time, in milliseconds, measured across all punches.",
-            "best": 1008.12,
-            "worst": 1198.54,
+            "best": 1000.11,
+            "worst": 2402.75,
             "all_points": [
-              1044.69,
-              1023.76,
-              1130.1
+              1781.95,
+              1468.1,
+              1304.18
             ],
             "all_points_description": "Reaction time averages for each 10-second segment of the session."
           }
@@ -49,26 +49,26 @@
         "punch_speed": {
           "unit": "px/s",
           "types": {
-            "jab": 3168.31,
-            "hook": 3264.66,
-            "uppercut": 3669.16
+            "jab": 1841.73,
+            "hook": 1525.32,
+            "uppercut": 2607.27
           },
           "derived": {
-            "average": 3237.67,
+            "average": 1976.7,
             "average_description": "Mean punch speed across all punch types during the session.",
-            "best": 3669.16,
-            "worst": 1464.43,
+            "best": 3049.52,
+            "worst": 462.2,
             "all_points": [
-              2743.51,
-              3502.33,
-              3378.94
+              2397.79,
+              1835.81,
+              1696.49
             ],
             "combo_tempo": {
               "unit": "px/s",
               "segments": {
-                "first_third": 2743.51,
-                "second_third": 3502.33,
-                "final_third": 3378.94
+                "first_third": 2397.79,
+                "second_third": 1835.81,
+                "final_third": 1696.49
               },
               "description": "Average punch speed per 10-second segment of the session."
             }
@@ -98,14 +98,14 @@
           "unit": "%",
           "description": "Average accuracy over each third of the session.",
           "segments": {
-            "first_third": 66.67,
-            "second_third": 50.0,
+            "first_third": 33.33,
+            "second_third": 66.67,
             "final_third": 100.0
           }
         },
         "punches_avoided": {
           "unit": "%",
-          "value": 100.0,
+          "value": 75.0,
           "description": "Percentage of incoming targets that were blocked or dodged."
         }
       },
@@ -113,9 +113,9 @@
         "flying_blocks_summary": {
           "unit": "count",
           "values": {
-            "blocked": 2,
-            "dodged": 3,
-            "hit": 0
+            "blocked": 3,
+            "dodged": 0,
+            "hit": 1
           },
           "description": "Counts of block, dodge, and hit outcomes from the flying blocks drill."
         }

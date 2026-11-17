@@ -11,7 +11,7 @@ import { AuthProvider, useAuth } from './contexts/AuthContext'
 
 function AppContent() {
   const { user, loading } = useAuth() 
-  const [currentPage, setCurrentPage] = useState('dashboard')
+  const [currentPage, setCurrentPage] = useState('home')
   const [currentSessionId, setCurrentSessionId] = useState(null)
   const [analysisMetrics, setAnalysisMetrics] = useState(null)
   // Where the progress page was opened from, so its back button returns there
