@@ -4,6 +4,7 @@ import { FilesetResolver, PoseLandmarker, DrawingUtils } from "https://cdn.jsdel
 import * as ort from "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.min.mjs";
 import { CLASS_NAMES, CLIP_FRAMES, TARGET_FPS, normalizeSkeleton, extractLiveClip, mirrorSkeleton, buildTensor } from "./pipeline.js";
 import { PunchDetector, GUARD_READY_SAMPLES } from "./punchDetector.js";
+import { Calibrator, FormMonitor, MetricsLog, computeMetrics, defaultBaseline, thresholds, formSummaryText } from "./form.js";
 
 // ── Game config (same values as main_python_analysis.py) ─────────────────────
 const STANCE = "orthodox";
@@ -37,6 +38,15 @@ const ATTACK_WEIGHTS = { jab: 0.4, hook: 0.35, uppercut: 0.25 };
 const JAB_RADIUS_SW = 0.45, HOOK_BAND_HEIGHT_SW = 0.4, UPPERCUT_BAND_WIDTH_SW = 0.8;
 const HEAD_HALF_WIDTH_SW = 0.15, HEAD_TOP_SW = 0.35, HEAD_BOTTOM_SW = 0.15, MIN_SHOULDER_PX = 40;
 
+// ── Form check config (the thresholds are in form.js) ────────────────────────
+const QUERY = new URLSearchParams(location.search);
+const SKIP_CAL = QUERY.get("skipcal") === "1";          // skip stance calibration, use default thresholds
+const SHOW_FORM_DEBUG = QUERY.get("formdebug") === "1"; // metrics overlay + window.ppForm.dumpCSV()
+const FORM_SCORING = "off";                             // "off" | "bonus" | "bonus+penalty"
+const FORM_BONUS_MAX = 300, FORM_FAULT_PENALTY = 10;    // end bonus = form % × max; penalty per fault
+const CAL_READY_FLASH_S = 0.4;
+const FORM_OK_COLOR = [60, 220, 90], FORM_WARN_COLOR = [255, 165, 0], FORM_BAD_COLOR = [255, 60, 60];
+
 // Colors as [r, g, b].
 const PUNCH_COLORS = { jab: [255, 0, 0], hook: [0, 255, 0], uppercut: [0, 0, 255] };
 const GRADE_COLORS = { PERFECT: [255, 230, 0], GOOD: [255, 255, 255], MISS: [160, 160, 160] };
@@ -59,6 +69,7 @@ const ctx = canvas.getContext("2d");
 const panel = document.getElementById("panel");
 const statusEl = document.getElementById("status");
 const startBtn = document.getElementById("start");
+const skipBtn = document.getElementById("skip-cal");
 let W = 960, H = 540, S = 1;
 let landmarker, session, drawing;
 
@@ -395,8 +406,18 @@ const detector = new PunchDetector({
   R: { wrist: RW, shoulder: RS, contact: HAND_CONTACT.R },
 });
 
+// Stance calibration happens once per page load; a skipped one leaves the baseline null (default thresholds).
+const calib = { done: false, baseline: null };
+const calibrator = new Calibrator({ stance: STANCE });
+let calView = null, calPassedAt = null;   // last Calibrator result; when it passed (for the READY flash)
+let form = null, formView = null;         // FormMonitor of the round and its last result
+const formLog = SHOW_FORM_DEBUG ? new MetricsLog() : null;
+let debugMetrics = null;
+
 function newRound(now) {
   defense.reset();
+  form = new FormMonitor(calib.baseline ?? defaultBaseline(), { stance: STANCE });
+  formView = null;
   st = {
     start: now, score: 0, phase: "idle", type: null, side: null, center: null, spawnTs: 0, idealTs: 0,
     calloutTs: 0, nextSpawn: 0, handInsidePrev: true, recent: [], reserved: [], texts: [], vignetteUntil: 0,
@@ -540,6 +561,8 @@ function stepRound(lms, now, events) {
     }
   }
 
+  stepForm(lms, now, events);
+
   // 4. Defense (drawn first so the punch target stays on top of an attack band).
   const outcome = defense.update(lms, now, st.reserved);
   if (outcome === "Hit") {
@@ -578,6 +601,159 @@ function drawRoundText(now) {
     textCentered(st.prediction.text, W / 2, y, st.prediction.color, 1, false);
   }
   drawHud(st.score, MAX_RUNTIME - (now - st.start));
+  drawFormHud();
+}
+
+// ── Guard form check (form.js) ───────────────────────────────────────────────
+// Runs under the mirror transform: updates the monitor and rings the joints that are out of place.
+function stepForm(lms, now, events) {
+  formView = form.update(now, lms, W, H, { trackers: detector.trackers, events, defending: !!defense.attack });
+  if (FORM_SCORING === "bonus+penalty") st.score = Math.max(0, st.score - FORM_FAULT_PENALTY * formView.events.length);
+  if (!formView.valid) return;
+  const pulse = 0.5 + 0.5 * Math.sin(now * 12);
+  for (const f of formView.faults) {
+    const [x, y] = formView.metrics.pts[f.side][f.kind === "elbow" ? "e" : "w"];
+    strokeCircle(x, y, (14 + 3 * pulse) * S, rgba(FORM_BAD_COLOR, 0.6 + 0.4 * pulse), 3 * S);
+  }
+}
+
+// Screen coordinates: the cue banner (above the callout band, below the prediction box) and the form meter.
+function drawFormHud() {
+  if (!formView) return;
+  if (formView.cue) {
+    fitFont(formView.cue.text, W * 0.45, H * 0.07);
+    textCentered(formView.cue.text, W / 2, H * 0.26, FORM_WARN_COLOR);
+  }
+  const v = formView.formEMA, mw = 12 * S, mh = 120 * S, x = W - Math.max(12, W / 60) - mw, y = H / 2 - mh / 2;
+  ctx.save();
+  ctx.beginPath();
+  ctx.roundRect(x, y, mw, mh, mw / 2);
+  ctx.fillStyle = "rgba(20,20,20,0.6)";
+  ctx.fill();
+  ctx.clip();
+  ctx.fillStyle = rgba(v > 0.8 ? FORM_OK_COLOR : v >= 0.5 ? FORM_WARN_COLOR : FORM_BAD_COLOR);
+  ctx.fillRect(x, y + mh * (1 - v), mw, mh * v);
+  ctx.restore();
+  ctx.font = `bold ${11 * S}px system-ui, sans-serif`;
+  textCentered("FORM", x + mw / 2, y + mh + 12 * S, WHITE);
+}
+
+// ── Stance calibration (form.js) ─────────────────────────────────────────────
+function startCalibration(now) {
+  mode = "calibrate";
+  calView = null;
+  calPassedAt = null;
+  detector.resetGuards();   // learn the guard from the calibrated pose, not from the user at the keyboard
+  calibrator.reset(now);
+}
+
+function skipCalibration() {
+  if (mode !== "calibrate") return;
+  skipBtn.hidden = true;
+  mode = "countdown";
+  modeStart = performance.now() / 1000;
+}
+
+// Runs under the mirror transform: checks the pose and draws the guard to copy.
+function stepCalibration(lms, now) {
+  if (calPassedAt === null) {
+    calView = calibrator.update(now, lms, W, H, { trackers: detector.trackers });
+    if (calView.holdStarted) detector.resetGuards();   // the pose just became a correct guard: learn this one
+    if (calView.done) {
+      calib.done = true;
+      calib.baseline = calView.baseline;
+      calPassedAt = now;
+      skipBtn.hidden = true;
+    } else if (calView.canSkip) {
+      skipBtn.hidden = false;
+    }
+  }
+  // Ghost guard: where the fists and elbows should be, anchored to the live shoulders.
+  const m = calView.metrics;
+  let sw = 0.25 * W, hs = 0.6 * sw, shY = 0.45 * H, chinY = shY - 0.55 * hs, mid = W / 2;
+  let sx = { L: mid + sw / 2, R: mid - sw / 2 };
+  if (m.valid) ({ sw, hs, shY, chinY, midX: mid } = m, sx = { L: m.pts.L.s[0], R: m.pts.R.s[0] });
+  const spot = (x, y, r, ok) => {
+    const c = ok ? FORM_OK_COLOR : WHITE;
+    fillCircle(x, y, r, rgba(c, 0.35));
+    strokeCircle(x, y, r, rgba(c, 0.8), 2 * S);
+  };
+  for (const s of ["L", "R"]) {
+    spot(sx[s] + Math.sign(mid - sx[s]) * 0.1 * sw, chinY, 0.22 * sw, calView.parts.wrist[s]);
+    spot(sx[s], shY + 0.9 * hs, 0.16 * sw, calView.parts.elbow[s]);
+  }
+}
+
+function textLeft(text, x, y, color) {
+  ctx.save();
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+  ctx.lineWidth = 4;
+  ctx.lineJoin = "round";
+  ctx.strokeStyle = "rgba(20,20,20,0.9)";
+  ctx.strokeText(text, x, y);
+  ctx.fillStyle = rgba(color);
+  ctx.fillText(text, x, y);
+  ctx.restore();
+}
+
+// Screen coordinates: title, checklist, what to fix, hold ring.
+function drawCalibrationHud(now) {
+  const v = calView;
+  if (!v) return;
+  fitFont("GET IN YOUR GUARD", W * 0.5, H * 0.06);
+  textCentered("GET IN YOUR GUARD", W / 2, H * 0.08, WHITE);
+  ctx.font = `bold ${18 * S}px system-ui, sans-serif`;
+  v.checks.forEach((c, i) => textLeft(`${c.ok ? "✓" : "•"} ${c.label}`, 20 * S, H * 0.18 + 26 * S * i, c.ok ? FORM_OK_COLOR : [190, 190, 190]));
+
+  if (calPassedAt !== null) {
+    fitFont("READY!", W * 0.5, H * 0.2);
+    textCentered("READY!", W / 2, H / 2, FORM_OK_COLOR);
+    return;
+  }
+  const m = v.metrics;
+  if (m.valid) {   // hold ring around the head and shoulders
+    const x = mx(m.midX), y = m.shY - m.hs / 2, r = 0.95 * m.sw;
+    strokeCircle(x, y, r, rgba(WHITE, 0.25), 6 * S);
+    if (v.holdFrac > 0) {
+      ctx.strokeStyle = rgba(FORM_OK_COLOR);
+      ctx.lineWidth = 6 * S;
+      ctx.beginPath();
+      ctx.arc(x, y, r, -Math.PI / 2, -Math.PI / 2 + 2 * Math.PI * v.holdFrac);
+      ctx.stroke();
+    }
+  }
+  const msg = v.firstFail ? v.firstFail.message : "Hold it…";
+  ctx.font = `bold ${(v.hint && v.firstFail ? 34 : 24) * S}px system-ui, sans-serif`;
+  textCentered(msg, W / 2, H * 0.80, v.firstFail ? FORM_WARN_COLOR : FORM_OK_COLOR);
+  if (v.hint) {
+    ctx.font = `bold ${18 * S}px system-ui, sans-serif`;
+    textCentered("Tip: make fists by your cheeks, elbows touching your sides", W / 2, H * 0.88, WHITE);
+  }
+}
+
+// ?formdebug=1: per-side metrics with their fault thresholds.
+function drawFormDebug() {
+  const m = debugMetrics, th = form?.th ?? thresholds(calib.baseline, STANCE);
+  ctx.font = `bold ${15 * S}px system-ui, sans-serif`;
+  const lines = !m?.valid ? [`form: ${m?.reason ?? "no data"}`] : [
+    ...["L", "R"].map((s) => `${s}: handH ${m.handH[s].toFixed(2)} (<${th.handDropOn[s].toFixed(2)})  flare ${m.flare[s].toFixed(2)} (>${th.flareOn[s].toFixed(2)})  lift ${m.lift[s].toFixed(2)}`),
+    `chin dx ${m.chinDx.toFixed(2)} (>${th.chinXOn.toFixed(2)})  dy ${m.chinDy.toFixed(2)} (>${th.chinYOn.toFixed(2)})  sw ${m.sw.toFixed(0)}px  hs ${(m.hs / m.sw).toFixed(2)}`,
+  ];
+  lines.forEach((text, i) => textLeft(text, 20 * S, H * 0.55 + 22 * S * i, [120, 220, 255]));
+}
+
+if (formLog) {
+  window.ppForm = {
+    log: formLog,
+    dumpCSV() {
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(new Blob([formLog.toCSV()], { type: "text/csv" }));
+      a.download = "form_metrics.csv";
+      a.click();
+      URL.revokeObjectURL(a.href);
+    },
+  };
 }
 
 // Debug overlay for the punch detector: peak circles in camera coords (call under the mirror transform)…
@@ -613,11 +789,23 @@ function showPanel(html, buttonText) {
 // Same as the end of the Python script: print the totals, release the camera, close the view.
 function endRound() {
   mode = "over";
-  const d = defense.stats, t = st.timing;
+  const d = defense.stats, t = st.timing, fs = form.summary();
+  const bonus = FORM_SCORING !== "off" && fs.formPct !== null ? Math.round(fs.formPct * FORM_BONUS_MAX) : 0;
+  st.score += bonus;
   console.log(`Final score: ${st.score}  |  Timing - Perfect: ${t.perfect}, Good: ${t.good}, Miss: ${t.miss}`);
   console.log(`Defense stats - Blocked: ${d.blocked}, Dodged: ${d.dodged}, Hit: ${d.hit}`);
+  console.log(formSummaryText(fs) + (bonus ? `  |  Form bonus: +${bonus}` : ""));
+  if (fs.tip) console.log(`Tip: ${fs.tip}`);
   video.srcObject.getTracks().forEach((track) => track.stop());
   ctx.clearRect(0, 0, W, H);
+
+  // The loop has stopped, so this stays on screen.
+  const line = (text, y, maxH, color) => { fitFont(text, W * 0.9, maxH); textCentered(text, W / 2, y, color, 1, false); };
+  line("ROUND OVER", H * 0.22, H * 0.1, WHITE);
+  line(`Score ${st.score}${bonus ? `  (form bonus +${bonus})` : ""}`, H * 0.38, H * 0.07, GRADE_COLORS.PERFECT);
+  line(`Perfect ${t.perfect} · Good ${t.good} · Miss ${t.miss} · Blocked ${d.blocked} · Dodged ${d.dodged} · Hit ${d.hit}`, H * 0.50, H * 0.04, WHITE);
+  line(formSummaryText(fs), H * 0.62, H * 0.04, WHITE);
+  if (fs.tip) line(`Tip: ${fs.tip}`, H * 0.72, H * 0.04, FORM_WARN_COLOR);
 }
 
 // ── Main loop ────────────────────────────────────────────────────────────────
@@ -634,6 +822,10 @@ function loop() {
     if (worldBuf.length > WORLD_BUFFER_FRAMES) worldBuf.shift();
   }
   const punchEvents = lms ? detector.update(now, lms, W, H) : [];
+  if (formLog) {
+    debugMetrics = computeMetrics(lms, W, H, { stance: STANCE });
+    formLog.push(now, debugMetrics);
+  }
 
   // Shapes are drawn in camera coordinates under a mirror transform; text after, at mirrored x.
   ctx.setTransform(-1, 0, 0, 1, W, 0);
@@ -646,9 +838,16 @@ function loop() {
     drawing.drawLandmarks(lms.filter(shown), { color: "#ff3030", radius: 3 });
   }
   if (SHOW_PUNCH_DEBUG) drawPunchPeaks(now);
+  if (mode === "calibrate") stepCalibration(lms, now);
   if (mode === "playing") stepRound(lms, now, punchEvents);
   ctx.setTransform(1, 0, 0, 1, 0, 0);
-  if (SHOW_PUNCH_DEBUG) drawPunchState();
+  if (SHOW_PUNCH_DEBUG && mode !== "calibrate") drawPunchState();   // the calibration checklist uses that corner
+  if (SHOW_FORM_DEBUG) drawFormDebug();
+
+  if (mode === "calibrate") {
+    drawCalibrationHud(now);
+    if (calPassedAt !== null && now - calPassedAt >= CAL_READY_FLASH_S) { mode = "countdown"; modeStart = now; }
+  }
 
   if (mode === "countdown") {
     const left = PRESTART_COUNTDOWN_S - (now - modeStart);
@@ -663,9 +862,12 @@ function loop() {
 
 startBtn.addEventListener("click", () => {
   panel.hidden = true;
-  mode = "countdown";
-  modeStart = performance.now() / 1000;
+  const now = performance.now() / 1000;
+  if (SKIP_CAL || calib.done) { mode = "countdown"; modeStart = now; }
+  else startCalibration(now);
 });
+skipBtn.addEventListener("click", skipCalibration);
+window.addEventListener("keydown", (e) => { if (e.key === "s" || e.key === "S") skipCalibration(); });
 
 async function init() {
   try {

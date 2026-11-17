@@ -42,6 +42,7 @@ The web version is **completely static** — no server-side code needed. You can
 | `game.js` | Main game loop (offense + defense) |
 | `pipeline.js` | Pose processing (mirror, normalize, extract clips) |
 | `punchDetector.js` | Punch classification (model inference) |
+| `form.js` | Guard form check and stance calibration |
 | `punch_model.onnx` | Neural network weights (ONNX format) |
 
 ## Dependencies

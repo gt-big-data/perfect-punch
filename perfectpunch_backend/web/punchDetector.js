@@ -59,6 +59,8 @@ class PunchTracker {
 
   get guardReady() { return this.guardBuf.length >= GUARD_READY_SAMPLES; }
   isIdle() { return this.state === "idle"; }
+  /** Forget the learned guard so it is learned again from the current pose (not in the Python). */
+  resetGuard() { this.guardBuf = []; this.guardPos = null; this.awayStart = null; }
 
   /** Landmark positions of the fist right now, kept so the game can test where the punch landed. */
   #snapshot(lms) {
@@ -146,6 +148,9 @@ export class PunchDetector {
     this.trackers = Object.fromEntries(Object.entries(hands).map(([side, h]) => [side, new PunchTracker(side, h)]));
     this.scaleBuf = [];
   }
+
+  /** Called when stance calibration starts, so the guard comes from the calibrated pose. */
+  resetGuards() { for (const tr of Object.values(this.trackers)) tr.resetGuard(); }
 
   /**
    * Feed one frame of landmarks at time t (seconds). Returns this frame's events.
