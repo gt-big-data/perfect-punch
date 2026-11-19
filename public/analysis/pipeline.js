@@ -4,9 +4,9 @@
 
 export const CLIP_FRAMES = 50;
 export const TARGET_FPS = 60;
-export const VEL_WINDOW = 7;
+export const VEL_WINDOW = 5;
 export const CLASS_NAMES = ["jab", "lead-hook", "rear-uppercut"];
-const VELOCITY_LM = [11, 12, 13, 14, 15, 16];
+const VELOCITY_LM = [13, 14, 15, 16];
 const L_SHOULDER = 11, R_SHOULDER = 12, L_ELBOW = 13, R_ELBOW = 14, L_WRIST = 15, R_WRIST = 16;
 const TRACK = [L_ELBOW, R_ELBOW, L_WRIST, R_WRIST];
 const SHOULDER = [L_SHOULDER, R_SHOULDER, L_SHOULDER, R_SHOULDER];
@@ -61,7 +61,6 @@ export function extractLiveClip(rawFrames, srcFps) {
   if (rawFrames.length < 2) return null;
   const r = resampleFrames(rawFrames, srcFps);
   const n = r.length;
-  if (n < CLIP_FRAMES) return null;
   const vels = [0];
   for (let i = 1; i < n; i++) vels.push(compoundVelocity(r[i], r[i - 1]));
   // np.convolve(vels, ones(7)/7, mode='same')
@@ -71,9 +70,13 @@ export function extractLiveClip(rawFrames, srcFps) {
     for (let j = i - half; j <= i + half; j++) if (j >= 0 && j < n) s += vels[j];
     return s / VEL_WINDOW;
   });
-  let peak = CLIP_FRAMES - 1;
-  for (let i = CLIP_FRAMES; i < n; i++) if (smooth[i] > smooth[peak]) peak = i;
-  return r.slice(peak + 1 - CLIP_FRAMES, peak + 1);
+  // ST-GCN contract: window ends at the speed peak; short clips are front-padded with the first frame.
+  const minPeak = n >= CLIP_FRAMES ? CLIP_FRAMES - 1 : 0;
+  let peak = minPeak;
+  for (let i = minPeak + 1; i < n; i++) if (smooth[i] > smooth[peak]) peak = i;
+  const start = peak + 1 - CLIP_FRAMES;
+  if (start < 0) return [...Array(-start).fill(r[0]), ...r.slice(0, peak + 1)];
+  return r.slice(start, peak + 1);
 }
 
 function angleCos(a, b, c) {
@@ -96,7 +99,7 @@ export function buildTensor(clip) {
       const v = t > 0 ? sub(p, pos(t - 1, j)) : [0, 0, 0];
       const bone = sub(p, j < 2 ? f[SHOULDER[j]] : f[TRACK[j - 2]]);
       const bl = norm(bone) + 1e-8;
-      const lat = v[0] / (Math.hypot(v[0], v[2]) + eps);
+      const lat = v[0] / (Math.hypot(v[0], v[1], v[2]) + eps);
       const vert = v[1] / (norm(v) + eps);
       const angle = j % 2 === 0 ? la : ra;
       for (let k = 0; k < 3; k++) {
