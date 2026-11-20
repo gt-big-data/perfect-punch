@@ -5,6 +5,7 @@ import * as ort from "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/o
 import { CLASS_NAMES, CLIP_FRAMES, TARGET_FPS, normalizeSkeleton, extractLiveClip, mirrorSkeleton, buildTensor } from "./pipeline.js";
 import { PunchDetector, GUARD_READY_SAMPLES } from "./punchDetector.js";
 import { respawnTarget } from "./targetPlacement.js";
+import { DEFAULT_WEIGHTS, PunchPicker, baseWeights, punchTotals } from "./punchDistribution.js";
 
 // ── Game config (same values as main_python_analysis.py) ─────────────────────
 const STANCE = "orthodox";
@@ -15,7 +16,6 @@ const PERFECT_WINDOW_S = 0.10;
 const GOOD_WINDOW_S = 0.25;
 const TARGET_VISUAL_SCALE = 2.5;
 const HIT_RADIUS_SCALE = 3.0;
-const MAX_SAME_TARGET_IN_A_ROW = 2;
 const SCORE_PERFECT = 300, SCORE_GOOD = 100, SCORE_DEFENSE_BONUS = 50, SCORE_HIT_PENALTY = 50;
 const FLOATING_TEXT_S = 0.6, HIT_VIGNETTE_S = 0.3, SCHEDULE_MARGIN_S = 0.1;
 const MODEL_CONF_THRESHOLD = 0.55, LOOK_BACK_SECONDS = 2.5, WORLD_BUFFER_FRAMES = 150;
@@ -24,7 +24,7 @@ const MAX_RUNTIME = 30, PRESTART_COUNTDOWN_S = 3, PREDICTION_OVERLAY_S = 1.8, TA
 const SEGMENT_BUFFER_FRAMES = 3;     // camera frames added either side of a punch's start→end for the model
 const PUNCH_RESOLVE_GRACE_S = 0.35;  // after the hit window closes, wait this long for a punch still being thrown
 const PENDING_CLASSIFY_S = 0.6;      // after a wrist-overlap hit, wait this long for the punch segment to finish
-const SHOW_PUNCH_DEBUG = true;       // per-hand detector state + peak circles (like both_hands_tracking.py)
+const SHOW_PUNCH_DEBUG = false;       // per-hand detector state + peak circles (like both_hands_tracking.py)
 const PEAK_DISPLAY_S = 0.5;
 const MODEL_TO_TARGET ={ jab: "jab", "lead-hook": "hook", "rear-uppercut": "uppercut" };
 // Pixel sizes below were tuned for the Python app's 960×540 camera; scaled by W / 960.
@@ -63,6 +63,7 @@ const statusEl = document.getElementById("status");
 const startBtn = document.getElementById("start");
 let W = 960, H = 540, S = 1;
 let landmarker, session, drawing;
+let punchWeights = DEFAULT_WEIGHTS;   // base punch type distribution, from the user's recent sessions
 
 // ── Small helpers ────────────────────────────────────────────────────────────
 const rgba = (c, a = 1, k = 1) => `rgba(${c[0] * k | 0},${c[1] * k | 0},${c[2] * k | 0},${a})`;
@@ -79,11 +80,6 @@ function circleOverlapsRect(cx, cy, r, [x1, y1, x2, y2]) {
 }
 const shapeOverlapsRect = (s, rect) =>
   !!s && (s[0] === "circle" ? circleOverlapsRect(s[1], s[2], s[3], rect) : rectsOverlap(s.slice(1), rect));
-
-function choosePunchType() {
-  const r = Math.random();
-  return r < 0.625 ? "jab" : r < 0.875 ? "hook" : "uppercut";
-}
 
 function choosePunchSide(type, allowRandom) {
   if (allowRandom) return Math.random() < 0.5 ? "L" : "R";
@@ -372,21 +368,34 @@ function newRound(now) {
   defense.reset();
   st = {
     start: now, score: 0, phase: "idle", type: null, side: null, center: null, spawnTs: 0, idealTs: 0,
-    calloutTs: 0, nextSpawn: 0, handInsidePrev: true, recent: [], reserved: [], texts: [], vignetteUntil: 0,
+    calloutTs: 0, nextSpawn: 0, handInsidePrev: true, reserved: [], texts: [], vignetteUntil: 0,
     prediction: null, pending: null, timing: { perfect: 0, good: 0, miss: 0 }, attempts: [],
+    picker: new PunchPicker(punchWeights),
   };
 }
 
 function pickNextTarget() {
-  let type, side;
-  for (let i = 0; i < 25; i++) {
-    type = choosePunchType();
-    side = choosePunchSide(type, ALLOW_RANDOM_SIDES);
-    if (st.recent.length < MAX_SAME_TARGET_IN_A_ROW || st.recent.some((r) => r !== type + side)) break;
+  const type = st.picker.next();
+  return [type, choosePunchSide(type, ALLOW_RANDOM_SIDES)];
+}
+
+// Base punch distribution from the user's 10 most recent saved sessions (GET /stats, newest first).
+// Not signed in, no history, or any error → the default split.
+async function loadPunchWeights() {
+  const base = sessionStorage.getItem("pp.apiBase") || "";
+  const token = sessionStorage.getItem("pp.apiToken") || "";
+  if (!base || !token) return DEFAULT_WEIGHTS;
+  try {
+    const response = await fetch(`${base.replace(/\/$/, "")}/stats`, { headers: { Authorization: `Bearer ${token}` } });
+    if (!response.ok) throw new Error(`GET /stats returned ${response.status}`);
+    const totals = punchTotals(await response.json());
+    const weights = baseWeights(totals);
+    console.log("Punch distribution", { totals, weights });
+    return weights;
+  } catch (error) {
+    console.warn("Could not load punch history; using the default punch distribution", error);
+    return DEFAULT_WEIGHTS;
   }
-  st.recent.push(type + side);
-  if (st.recent.length > MAX_SAME_TARGET_IN_A_ROW) st.recent.shift();
-  return [type, side];
 }
 
 function bufferFps() {
@@ -740,6 +749,7 @@ async function init() {
     drawing = new DrawingUtils(ctx);
 
     showPanel("Loading pose and punch models…");
+    const weightsReady = loadPunchWeights();   // never rejects; runs while the models load
     const fileset = await FilesetResolver.forVisionTasks(MP_WASM);
     const makeLandmarker = (delegate) => PoseLandmarker.createFromOptions(fileset, {
       baseOptions: { modelAssetPath: POSE_MODEL_URL, delegate },
@@ -758,6 +768,7 @@ async function init() {
     session = await ort.InferenceSession.create(new URL("punch_model.onnx", import.meta.url).href, {
       executionProviders: ["wasm"],
     });
+    punchWeights = await weightsReady;
     mode = "ready";
     showPanel(`<h2>Perfect Punch</h2><p>Stand back so your head, shoulders and hips are in view.</p>
       <p>Hit targets with the called hand as the ring closes. Dodge or block the orange attacks.</p>`, "Start round");

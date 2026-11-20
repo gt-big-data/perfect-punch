@@ -1,4 +1,4 @@
-import test from 'node:test';
+import test, { mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { respawnTarget } from '../public/analysis/targetPlacement.js';
 
@@ -12,42 +12,43 @@ landmarks[15] = point(350, 300);
 landmarks[16] = point(650, 300);
 landmarks[23] = point(450, 400);
 landmarks[24] = point(550, 400);
+// Shoulder width is 200, so with a 70px screen edge the boxes below are [xmin, xmax, ymin, ymax].
 const options = { width, height, radius: 25, margin: 70, avoidHandsPx: 0 };
 
-test('hooks spawn near the head and body center on the called hand side', (t) => {
-  const random = t.mock.method(Math, 'random');
-  for (const [side, minX, maxX] of [['L', 400, 475], ['R', 525, 600]]) {
-    for (const [value, expected] of [[0, [minX, 120]], [0.999999, [maxX, 200]]]) {
-      random.mock.mockImplementation(() => value);
-      assert.deepEqual(respawnTarget(landmarks, { ...options, type: 'hook', side }), expected);
-    }
-  }
+// Corners of the box: Math.random() = 0 gives (xmin, ymin), 0.999999 gives (xmax, ymax).
+function corners(type, side, pose = landmarks) {
+  const random = mock.method(Math, 'random');
+  const get = (value) => { random.mock.mockImplementation(() => value); return respawnTarget(pose, { ...options, type, side }); };
+  const result = [get(0), get(0.999999)];
+  random.mock.restore();
+  return result;
+}
+
+test('jabs span the midline to 1 shoulder past the shoulder, head level to mid-chest', () => {
+  assert.deepEqual(corners('jab', 'L'), [[200, 70], [500, 300]]);
+  assert.deepEqual(corners('jab', 'R'), [[500, 70], [800, 300]]);
 });
 
-test('jabs retain the original wider torso region', (t) => {
-  const random = t.mock.method(Math, 'random');
-  for (const [value, expected] of [[0, [200, 120]], [0.999999, [475, 300]]]) {
-    random.mock.mockImplementation(() => value);
-    assert.deepEqual(respawnTarget(landmarks, { ...options, type: 'jab', side: 'L' }), expected);
-  }
+test('hooks target the opposite shoulder ±0.25 shoulder width, head level to 1 shoulder down', () => {
+  assert.deepEqual(corners('hook', 'L'), [[550, 70], [650, 400]]);
+  assert.deepEqual(corners('hook', 'R'), [[350, 70], [450, 400]]);
 });
 
-test('uppercuts spawn higher while retaining the original horizontal range', (t) => {
-  const random = t.mock.method(Math, 'random');
-  for (const [side, minX, maxX] of [['L', 200, 475], ['R', 525, 800]]) {
-    for (const [value, expected] of [[0, [minX, 120]], [0.999999, [maxX, 250]]]) {
-      random.mock.mockImplementation(() => value);
-      assert.deepEqual(respawnTarget(landmarks, { ...options, type: 'uppercut', side }), expected);
-    }
-  }
+test('uppercuts span the midline to 0.2 shoulder past the shoulder, 1.5 shoulders above to the shoulder line', () => {
+  assert.deepEqual(corners('uppercut', 'L'), [[360, 70], [500, 200]]);
+  assert.deepEqual(corners('uppercut', 'R'), [[500, 70], [640, 200]]);
 });
 
-test('an inverted torso does not move uppercuts lower than before', (t) => {
+test('the uppercut top sits 1.5 shoulder widths above the shoulders, ignoring the nose', () => {
   const pose = landmarks.slice();
-  pose[23] = point(450, 100);
-  pose[24] = point(550, 100);
-  t.mock.method(Math, 'random', () => 0.999999);
-  assert.deepEqual(respawnTarget(pose, { ...options, type: 'uppercut', side: 'L' }), [475, 150]);
+  pose[0] = point(500, 500);    // nose far below the shoulders: must not move the box
+  pose[11] = point(450, 400);   // shoulders at y=400, width 100 → top at 400 - 150 = 250
+  pose[12] = point(550, 400);
+  assert.deepEqual(corners('uppercut', 'L', pose), [[430, 250], [500, 400]]);
+});
+
+test('an unknown type falls back to the original torso region', () => {
+  assert.deepEqual(corners('mystery', 'L'), [[200, 120], [475, 300]]);
 });
 
 test('hook spawns stay within the frame and handle a narrow shoulder width', () => {
@@ -57,17 +58,17 @@ test('hook spawns stay within the frame and handle a narrow shoulder width', () 
   for (const side of ['L', 'R']) {
     const [x, y] = respawnTarget(narrow, { ...options, type: 'hook', side });
     assert.ok(x >= 70 && x <= width - 70);
-    assert.ok(y >= 120 && y <= 200);
+    assert.ok(y >= 70 && y <= height - 70);
   }
 });
 
 test('hook placement avoids hands when a suitable point is found', (t) => {
   const pose = landmarks.slice();
-  pose[15] = point(400, 120);
+  pose[15] = point(550, 70);   // left hand sits on the first candidate
   const values = [0, 0, 0.999999, 0.999999];
   t.mock.method(Math, 'random', () => values.shift());
   assert.deepEqual(
-    respawnTarget(pose, { ...options, type: 'hook', side: 'L', avoidHandsPx: 100 }),
-    [475, 200],
+    respawnTarget(pose, { ...options, type: 'hook', side: 'L', avoidHandsPx: 90 }),
+    [650, 400],
   );
 });
