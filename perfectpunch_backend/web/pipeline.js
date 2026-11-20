@@ -61,6 +61,7 @@ export function extractLiveClip(rawFrames, srcFps) {
   if (rawFrames.length < 2) return null;
   const r = resampleFrames(rawFrames, srcFps);
   const n = r.length;
+  if (n < CLIP_FRAMES) return null;
   const vels = [0];
   for (let i = 1; i < n; i++) vels.push(compoundVelocity(r[i], r[i - 1]));
   // np.convolve(vels, ones(7)/7, mode='same')
@@ -70,13 +71,9 @@ export function extractLiveClip(rawFrames, srcFps) {
     for (let j = i - half; j <= i + half; j++) if (j >= 0 && j < n) s += vels[j];
     return s / VEL_WINDOW;
   });
-  // ST-GCN contract: window ends at the speed peak; short clips are front-padded with the first frame.
-  const minPeak = n >= CLIP_FRAMES ? CLIP_FRAMES - 1 : 0;
-  let peak = minPeak;
-  for (let i = minPeak + 1; i < n; i++) if (smooth[i] > smooth[peak]) peak = i;
-  const start = peak + 1 - CLIP_FRAMES;
-  if (start < 0) return [...Array(-start).fill(r[0]), ...r.slice(0, peak + 1)];
-  return r.slice(start, peak + 1);
+  let peak = CLIP_FRAMES - 1;
+  for (let i = CLIP_FRAMES; i < n; i++) if (smooth[i] > smooth[peak]) peak = i;
+  return r.slice(peak + 1 - CLIP_FRAMES, peak + 1);
 }
 
 function angleCos(a, b, c) {
