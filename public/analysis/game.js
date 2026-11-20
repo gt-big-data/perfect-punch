@@ -4,6 +4,7 @@ import { FilesetResolver, PoseLandmarker, DrawingUtils } from "https://cdn.jsdel
 import * as ort from "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.wasm.min.mjs";
 import { CLASS_NAMES, CLIP_FRAMES, TARGET_FPS, normalizeSkeleton, extractLiveClip, mirrorSkeleton, buildTensor } from "./pipeline.js";
 import { PunchDetector, GUARD_READY_SAMPLES } from "./punchDetector.js";
+import { respawnTarget } from "./targetPlacement.js";
 
 // ── Game config (same values as main_python_analysis.py) ─────────────────────
 const STANCE = "orthodox";
@@ -45,7 +46,7 @@ const WHITE = [255, 255, 255];
 const LABELS = { jab: "JAB", hook: "HOOK", uppercut: "UPPERCUT", L: "LEFT", R: "RIGHT" };
 
 // MediaPipe Pose landmark indices.
-const NOSE = 0, LS = 11, RS = 12, LE = 13, RE = 14, LW = 15, RW = 16, LHIP = 23, RHIP = 24;
+const NOSE = 0, LS = 11, RS = 12, LE = 13, RE = 14, LW = 15, RW = 16;
 const HAND_CONTACT = { L: [15, 19, 21, 17], R: [16, 20, 22, 18] };   // wrist, index, thumb, pinky
 const SIDE_COLORS = { L: [0, 255, 0], R: [255, 165, 0] };             // debug overlay only
 
@@ -66,7 +67,6 @@ let landmarker, session, drawing;
 // ── Small helpers ────────────────────────────────────────────────────────────
 const rgba = (c, a = 1, k = 1) => `rgba(${c[0] * k | 0},${c[1] * k | 0},${c[2] * k | 0},${a})`;
 const rand = (a, b) => a + Math.random() * (b - a);
-const randint = (a, b) => Math.floor(rand(a, b + 1));
 const toPx = (lm) => [Math.trunc(lm.x * W), Math.trunc(lm.y * H)];
 const mx = (x) => W - 1 - x;   // camera x → mirrored display x
 const callout = (type, side) => `${LABELS[side]} ${LABELS[type]}`;
@@ -91,35 +91,7 @@ function choosePunchSide(type, allowRandom) {
   return type === "uppercut" ? rear : lead;
 }
 
-// ── Offense: target placement and hit test (target_utils.py) ─────────────────
-function respawnTarget(lms, radius, side, margin, avoidHandsPx) {
-  const edge = Math.max(radius, margin);
-  const [lsx, lsy] = toPx(lms[LS]), [rsx, rsy] = toPx(lms[RS]);
-  const lhy = toPx(lms[LHIP])[1], rhy = toPx(lms[RHIP])[1];
-  const ny = toPx(lms[NOSE])[1];
-  const sw = Math.abs(rsx - lsx);
-  const fullMin = Math.max(edge, Math.min(lsx, rsx) - sw), fullMax = Math.min(W - edge, Math.max(lsx, rsx) + sw);
-  let xmin = fullMin, xmax = fullMax;
-  // Keep the target on the half of the body of the hand that should hit it.
-  const bodyCx = Math.floor((lsx + rsx) / 2), handShoulderX = side === "L" ? lsx : rsx;
-  if (handShoulderX >= bodyCx) xmin = Math.max(xmin, bodyCx + radius);
-  else xmax = Math.min(xmax, bodyCx - radius);
-  if (xmax <= xmin) [xmin, xmax] = [fullMin, fullMax];
-  const shoulderY = Math.floor((lsy + rsy) / 2), waistY = Math.floor((lhy + rhy) / 2);
-  const ymin = Math.max(edge, Math.min(ny, shoulderY));
-  const ymax = Math.min(H - edge, Math.max(ny, shoulderY + Math.floor((waistY - shoulderY) / 2)));
-  if (xmax <= xmin || ymax <= ymin) return null;
-  const hands = [toPx(lms[LW]), toPx(lms[RW])];
-  let best = null, bestD = -1;
-  for (let i = 0; i < 20; i++) {
-    const c = [randint(xmin, xmax), randint(ymin, ymax)];
-    const d = Math.min(...hands.map(([hx, hy]) => Math.hypot(c[0] - hx, c[1] - hy)));
-    if (d >= avoidHandsPx) return c;
-    if (d > bestD) [best, bestD] = [c, d];
-  }
-  return best;
-}
-
+// ── Offense: target hit test (target_utils.py) ───────────────────────────────
 function pointsHitCircle(points, [cx, cy], radius) {
   const r = Math.max(1, Math.trunc(radius * HIT_RADIUS_SCALE));
   return points.some((p) => {
@@ -497,7 +469,10 @@ function stepRound(lms, now, events) {
 
   // 2. Callout over → spawn the target.
   if (st.phase === "callout" && lms && now >= st.calloutTs + CALLOUT_DURATION_S) {
-    const c = respawnTarget(lms, radius, st.side, visualR + 6, radius * HIT_RADIUS_SCALE + 20 * S);
+    const c = respawnTarget(lms, {
+      width: W, height: H, radius, side: st.side, type: st.type,
+      margin: visualR + 6, avoidHandsPx: radius * HIT_RADIUS_SCALE + 20 * S,
+    });
     if (c) {
       Object.assign(st, { center: c, spawnTs: now, idealTs: now + APPROACH_DURATION_S, phase: "active", handInsidePrev: true });
       st.reserved.push([st.idealTs - GOOD_WINDOW_S, st.idealTs + GOOD_WINDOW_S]);
