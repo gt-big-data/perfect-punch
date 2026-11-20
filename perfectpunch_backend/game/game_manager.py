@@ -5,6 +5,8 @@ from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass, field
 from enum import Enum
 from collections import defaultdict
+from perfectpunch_backend.game.target_tracker import TargetOutcomeTracker
+from perfectpunch_backend.target_utils import choose_punch_side, choose_punch_with_weights, choose_point_from_datavis_region
 
 try:
     import mediapipe as mp
@@ -56,6 +58,8 @@ class Target:
     hit: bool = False
     hit_time: Optional[float] = None
     required_punch: Optional[str] = None
+    expires_at: Optional[float] = None
+    required_hand: Optional[str] = None
 
 
 @dataclass
@@ -86,6 +90,11 @@ class GameSession:
     accuracy: float = 0.0
     total_targets_hit: int = 0
     total_targets_spawned: int = 0
+    tracker: Optional[TargetOutcomeTracker] = None
+    pending_target_events: List[Dict] = field(default_factory=list)
+    datavis_weights: Optional[Dict[str, float]] = None
+    datavis_regions: Dict[str, Dict[str, float]] = field(default_factory=dict)
+    latest_datavis_landmarks: Optional[Dict] = None
 
 
 class GameManager:
@@ -108,6 +117,7 @@ class GameManager:
         self.target_radius = 25
         self.spawn_protection_time = 0.5  # seconds
         self.min_confidence_threshold = 0.6
+        self.target_lifetime_seconds = 3.0
         
     def create_session(self, user_id: Optional[str] = None, duration: int = 30) -> GameSession:
         """Create a new game session."""
@@ -119,6 +129,7 @@ class GameManager:
             duration_seconds=duration,
             state=GameState.WAITING
         )
+        session.tracker = TargetOutcomeTracker(session_id)
         self.active_sessions[session_id] = session
         return session
     
@@ -158,6 +169,9 @@ class GameManager:
             
         session.state = GameState.FINISHED
         session.end_time = time.time()
+        if session.tracker:
+            session.pending_target_events.extend(session.tracker.expire(now_ms=int(session.end_time * 1000)))
+            session.pending_target_events.extend(session.tracker.cancel_pending(now_ms=int(session.end_time * 1000)))
         
         # Calculate final statistics
         self._calculate_session_stats(session)
@@ -177,112 +191,131 @@ class GameManager:
         elapsed = time.time() - session.start_time
         return elapsed >= session.duration_seconds
     
+    def expire_targets(self, session_id: str, now_ms: Optional[int] = None) -> List[Dict]:
+        session = self.active_sessions.get(session_id)
+        if not session or session.state != GameState.ACTIVE or not session.tracker:
+            return []
+        events = session.tracker.expire(now_ms=now_ms or int(time.time() * 1000))
+        session.pending_target_events.extend(events)
+        return events
+
+    def drain_target_events(self, session_id: str) -> List[Dict]:
+        session = self.active_sessions.get(session_id)
+        if not session:
+            return []
+        events = list(session.pending_target_events)
+        session.pending_target_events.clear()
+        return events
+
+    def set_datavis_config(self, session_id: str, weights: Dict[str, float],
+                           target_regions: Optional[Dict[str, Dict[str, float]]] = None) -> None:
+        """Session-scoped DataVis output. No formulas are computed by platform."""
+        from perfectpunch_backend.game.datavis_contract import validate_target_region
+        session = self.active_sessions.get(session_id)
+        if not session:
+            raise ValueError('Unknown game session')
+        # Validate before changing state.
+        import math
+        if set(weights) != {'jab', 'hook', 'uppercut'} or any(
+            isinstance(w, bool) or not isinstance(w, (float, int)) or
+            not math.isfinite(w) or w < 0 for w in weights.values()
+        ) or abs(sum(weights.values()) - 1) > 0.001:
+            raise ValueError('Expected finite jab/hook/uppercut weights summing to 1')
+        regions = target_regions or {}
+        if any(k not in {f'{p}:{h}' for p in ('jab', 'hook', 'uppercut')
+                            for h in ('left', 'right')} for k in regions):
+            raise ValueError('Target region keys must look like jab:left or hook:right')
+        validated = {k: validate_target_region(v) for k, v in regions.items()}
+        session.datavis_weights = dict(weights)
+        session.datavis_regions = validated
+
     def spawn_target(self, session_id: str, landmarks, frame_width: int, frame_height: int) -> Optional[Target]:
-        """Spawn a new target based on pose landmarks."""
+        """Create at most one pending requested target; DataVis supplies selection later."""
         session = self.active_sessions.get(session_id)
         if not session or session.state != GameState.ACTIVE:
             return None
-            
-        # Check if we should spawn a new target
-        current_time = time.time()
-        if session.targets:
-            last_target = session.targets[-1]
-            if not last_target.hit and (current_time - last_target.spawn_time) < self.spawn_protection_time:
-                return None  # Still in protection period
-                
-        # Generate target position
-        target_center = respawn_target(landmarks, frame_width, frame_height, self.target_radius)
-        if not target_center:
+        now = time.time()
+        self.expire_targets(session_id, int(now * 1000))
+        if session.tracker and any(r.status == 'pending' for r in session.tracker.targets.values()):
             return None
-            
-        # Choose target type
-        target_type_str = choose_punch_type()
-        target_type = TargetType(target_type_str)
-        
-        # Create target
+        # Choose type before target placement to support punch-specific DataVis geometry.
+        punch_type = (choose_punch_with_weights(session.datavis_weights)
+                      if session.datavis_weights else choose_punch_type())
+        chosen_side = choose_punch_side(punch_type)
+        requested_hand = 'left' if chosen_side == 'L' else 'right'
+        region = session.datavis_regions.get(f'{punch_type}:{requested_hand}')
+        if region:
+            center = choose_point_from_datavis_region(
+                region, frame_width, frame_height, self.target_radius)
+        else:
+            center = respawn_target(landmarks, frame_width, frame_height,
+                                    self.target_radius, side=chosen_side)
+        if center is None:
+            return None
+        target_id = str(uuid.uuid4())
         target = Target(
-            id=str(uuid.uuid4()),
-            center=target_center,
-            radius=self.target_radius,
-            target_type=target_type,
-            spawn_time=current_time,
-            required_punch=target_type_str
+            id=target_id, center=center, radius=self.target_radius,
+            target_type=TargetType(punch_type), spawn_time=now,
+            required_punch=punch_type, expires_at=now + self.target_lifetime_seconds,
+            required_hand=requested_hand,
         )
-        
         session.targets.append(target)
         session.total_targets_spawned += 1
-        
+        if session.tracker:
+            session.tracker.spawn(
+                target_id=target_id, requested_punch=punch_type,
+                spawned_at_ms=int(now * 1000),
+                expires_at_ms=int(target.expires_at * 1000),
+                center={'x': center[0], 'y': center[1]}, radius=self.target_radius,
+                requested_hand=requested_hand,
+            )
         return target
-    
-    def process_punch(self, session_id: str, pose_coords: List[Dict], landmarks, 
-                     frame_width: int, frame_height: int) -> Optional[Dict]:
-        """Process a punch attempt and check for target hits."""
+
+    def process_punch(self, session_id: str, pose_coords: List[Dict], landmarks,
+                      frame_width: int, frame_height: int) -> Optional[Dict]:
         session = self.active_sessions.get(session_id)
-        if not session or session.state != GameState.ACTIVE:
+        if not session or session.state != GameState.ACTIVE or not self.classifier:
             return None
-            
-        # Get model prediction
+        self.expire_targets(session_id)
+        current = self.get_current_target(session_id)
+        if not current:
+            return None
         prediction = self.classifier.predict(pose_coords)
         if not prediction:
             return None
-            
-        current_time = time.time()
-        
-        # Find active target (most recent unhit target)
-        active_target = None
-        for target in reversed(session.targets):
-            if not target.hit:
-                active_target = target
-                break
-                
-        # Check for target collision
-        target_hit = False
-        if active_target:
-            target_hit = wrists_hit_circle(
-                landmarks, frame_width, frame_height,
-                active_target.center, active_target.radius
-            )
-            
-        # Determine if punch was correct
-        was_correct = False
-        if target_hit and active_target:
-            was_correct = prediction["punch_type"] == active_target.required_punch
-            
-            # Mark target as hit
-            active_target.hit = True
-            active_target.hit_time = current_time
-            
-            if was_correct:
-                session.score += 10  # Base score for correct punch
-                session.total_targets_hit += 1
-                
-                # Bonus for quick response
-                response_time = current_time - active_target.spawn_time
-                if response_time < 2.0:  # Quick response bonus
-                    session.score += 5
-                    
-        # Create punch attempt record
-        punch_attempt = PunchAttempt(
-            id=str(uuid.uuid4()),
-            timestamp=current_time,
-            target_id=active_target.id if active_target else None,
-            predicted_punch=prediction["punch_type"],
-            confidence=prediction["confidence"],
-            was_correct=was_correct,
-            hit_target=target_hit,
-            response_time=current_time - active_target.spawn_time if active_target else None
+        # Preserve one attempt per confirmed target contact, not per camera frame.
+        hit = wrists_hit_circle(landmarks, frame_width, frame_height, current.center, current.radius)
+        if not hit:
+            return None
+        now = time.time()
+        matches = prediction['punch_type'] == current.required_punch
+        current.hit = True
+        current.hit_time = now
+        if matches:
+            session.score += 10
+            session.total_targets_hit += 1
+            if now - current.spawn_time < 2.0:
+                session.score += 5
+        attempt = PunchAttempt(
+            id=str(uuid.uuid4()), timestamp=now, target_id=current.id,
+            predicted_punch=prediction['punch_type'],
+            confidence=prediction['confidence'], was_correct=matches,
+            hit_target=True, response_time=now-current.spawn_time,
         )
-        
-        session.punch_attempts.append(punch_attempt)
-        
-        return {
-            "punch_attempt": punch_attempt,
-            "target_hit": target_hit,
-            "was_correct": was_correct,
-            "prediction": prediction,
-            "active_target": active_target
-        }
-    
+        session.punch_attempts.append(attempt)
+        if session.tracker:
+            event = session.tracker.resolve(
+                target_id=current.id, timing_grade=None, hit_target=True,
+                resolved_at_ms=int(now * 1000), detected_punch=prediction['punch_type'],
+                classification_correct=matches,
+                classifier_confidence=prediction['confidence'],
+            )
+            if event:
+                session.pending_target_events.append(event)
+        # No PERFECT/GOOD label is fabricated here: the backend has only collision evidence.
+        return {'punch_attempt': attempt, 'target_hit': True, 'was_correct': matches,
+                'prediction': prediction, 'active_target': current}
+
     def get_current_target(self, session_id: str) -> Optional[Target]:
         """Get the current active target for a session."""
         session = self.active_sessions.get(session_id)
@@ -291,7 +324,9 @@ class GameManager:
             
         # Return the most recent unhit target
         for target in reversed(session.targets):
-            if not target.hit:
+            if not target.hit and (not session.tracker or
+                    session.tracker.targets.get(target.id, None) is None or
+                    session.tracker.targets[target.id].status == 'pending'):
                 return target
                 
         return None
@@ -327,6 +362,7 @@ class GameManager:
             "elapsed_time": elapsed_time,
             "remaining_time": remaining_time,
             "punch_distribution": dict(punch_stats),
+            **(session.tracker.snapshot() if session.tracker else {}),
             "state": session.state.value
         }
     

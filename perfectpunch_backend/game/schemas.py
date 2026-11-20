@@ -82,6 +82,12 @@ class GameStatsResponse(BaseModel):
     elapsed_time: float
     remaining_time: float
     punch_distribution: Dict[str, int]
+    punch_stats: Dict[str, Any] = Field(default_factory=dict)
+    selection_history: List[str] = Field(default_factory=list)
+    last_selected_punch: Optional[str] = None
+    consecutive_punch_count: int = 0
+    totals: Dict[str, int] = Field(default_factory=dict)
+    metric_definition: Optional[str] = None
     state: GameState
 
 

@@ -766,3 +766,31 @@ def draw_chevron(frame: np.ndarray, center: Tuple[float, float], size: float,
     pts = np.array([back1, tip, back2], dtype=np.int32).reshape(-1, 1, 2)
     cv2.polylines(frame, [pts], False, color, thickness, cv2.LINE_AA)
     return frame
+
+# DataVis interface only: the DataVis team owns the weight and target-region formulas.
+def choose_punch_with_weights(weights):
+    """Sample a punch using weights supplied by DataVis; no formula here."""
+    import math
+    if not isinstance(weights, dict) or set(weights) != {'jab', 'hook', 'uppercut'}:
+        raise ValueError('Expected jab/hook/uppercut weights')
+    if any(not isinstance(x, (int, float)) or isinstance(x, bool) or
+           not math.isfinite(x) or x < 0 for x in weights.values()):
+        raise ValueError('Weights must be finite, nonnegative numbers')
+    total = sum(weights.values())
+    if total <= 0 or abs(total - 1.0) > 0.001:
+        raise ValueError('Weights must sum to 1')
+    return random.choices(list(weights), weights=list(weights.values()), k=1)[0]
+
+
+def choose_point_from_datavis_region(region, width, height, radius):
+    """Validate DataVis's normalized bounds and sample a target-center pixel."""
+    from perfectpunch_backend.game.datavis_contract import validate_target_region
+    from math import ceil, floor
+    bounds = validate_target_region(region)
+    xlo = max(radius, ceil(bounds['min_x'] * width))
+    xhi = min(width - radius, floor(bounds['max_x'] * width))
+    ylo = max(radius, ceil(bounds['min_y'] * height))
+    yhi = min(height - radius, floor(bounds['max_y'] * height))
+    if xhi < xlo or yhi < ylo:
+        raise ValueError('DataVis region cannot contain target at requested radius')
+    return random.randint(xlo, xhi), random.randint(ylo, yhi)

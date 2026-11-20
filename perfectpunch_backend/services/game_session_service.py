@@ -89,7 +89,9 @@ def live_session_document(session) -> dict:
             "accuracy": round(window_correct / len(window) * 100) if window else 0,
         })
 
+    platform_data = session.tracker.export() if getattr(session, 'tracker', None) else {}
     return {
+        **platform_data,
         "session_id": session.id,
         "user_id": session.user_id,
         "timestamp": stamp,
