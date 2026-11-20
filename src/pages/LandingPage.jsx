@@ -138,7 +138,7 @@ const LandingPage = ({ onNavigate, onBackToHome }) => {
     }
     sessionStorage.setItem('pp.apiToken', token);
     sessionStorage.setItem('pp.apiBase', import.meta.env.VITE_API_BASE_URL || '');
-    window.location.assign('/analysis/');
+    window.location.assign('/analysis/index.html');
   };
 
   return (
