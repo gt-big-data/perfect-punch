@@ -25,6 +25,7 @@ const SEGMENT_BUFFER_FRAMES = 3;     // camera frames added either side of a pun
 const PUNCH_RESOLVE_GRACE_S = 0.35;  // after the hit window closes, wait this long for a punch still being thrown
 const PENDING_CLASSIFY_S = 0.6;      // after a wrist-overlap hit, wait this long for the punch segment to finish
 const SHOW_PUNCH_DEBUG = false;       // per-hand detector state + peak circles (like both_hands_tracking.py)
+const SHOW_POSE_DEBUG = false;        // MediaPipe skeleton lines and landmark dots
 const PEAK_DISPLAY_S = 0.5;
 const MODEL_TO_TARGET ={ jab: "jab", "lead-hook": "hook", "rear-uppercut": "uppercut" };
 // Pixel sizes below were tuned for the Python app's 960×540 camera; scaled by W / 960.
@@ -708,7 +709,7 @@ function loop() {
   // Shapes are drawn in camera coordinates under a mirror transform; text after, at mirrored x.
   ctx.setTransform(-1, 0, 0, 1, W, 0);
   ctx.drawImage(video, 0, 0, W, H);
-  if (lms) {
+  if (lms && SHOW_POSE_DEBUG) {
     // Like mp_drawing.draw_landmarks: skip low-visibility or off-frame points (their guesses jitter).
     const shown = (l) => (l.visibility ?? 1) >= 0.5 && l.x >= 0 && l.x <= 1 && l.y >= 0 && l.y <= 1;
     drawing.drawConnectors(lms, PoseLandmarker.POSE_CONNECTIONS.filter((c) => shown(lms[c.start]) && shown(lms[c.end])),
